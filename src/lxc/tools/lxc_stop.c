@@ -20,33 +20,44 @@
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
-#include <stdio.h>
+
+#define _GNU_SOURCE
 #include <libgen.h>
-#include <unistd.h>
+#include <stdio.h>
+#include <string.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include <lxc/lxccontainer.h>
 
-#include "lxc.h"
-#include "log.h"
 #include "arguments.h"
-#include "commands.h"
-#include "utils.h"
+#include "tool_utils.h"
 
-#define OPT_NO_LOCK OPT_USAGE+1
-#define OPT_NO_KILL OPT_USAGE+2
+#define OPT_NO_LOCK OPT_USAGE + 1
+#define OPT_NO_KILL OPT_USAGE + 2
 
-lxc_log_define(lxc_stop_ui, lxc);
-
-static int my_parser(struct lxc_arguments* args, int c, char* arg)
+static int my_parser(struct lxc_arguments *args, int c, char *arg)
 {
 	switch (c) {
-	case 'r': args->reboot = 1; break;
-	case 'W': args->nowait = 1; break;
-	case 't': args->timeout = atoi(arg); break;
-	case 'k': args->hardstop = 1; break;
-	case OPT_NO_LOCK: args->nolock = 1; break;
-	case OPT_NO_KILL: args->nokill = 1; break;
+	case 'r':
+		args->reboot = 1;
+		break;
+	case 'W':
+		args->nowait = 1;
+		break;
+	case 't':
+		if (lxc_safe_long(arg, &args->timeout) < 0)
+			return -1;
+		break;
+	case 'k':
+		args->hardstop = 1;
+		break;
+	case OPT_NO_LOCK:
+		args->nolock = 1;
+		break;
+	case OPT_NO_KILL:
+		args->nokill = 1;
+		break;
 	}
 	return 0;
 }
@@ -83,89 +94,36 @@ Options :\n\
 	.timeout  = -2,
 };
 
-/* returns -1 on failure, 0 on success */
-static int do_reboot_and_check(struct lxc_arguments *a, struct lxc_container *c)
-{
-	int ret;
-	pid_t pid;
-	pid_t newpid;
-	int timeout = a->timeout;
-
-	pid = c->init_pid(c);
-	if (pid == -1)
-		return -1;
-	if (!c->reboot(c))
-		return -1;
-	if (a->nowait)
-		return 0;
-	if (timeout == 0)
-		goto out;
-
-	for (;;) {
-		/* can we use c-> wait for this, assuming it will
-		 * re-enter RUNNING?  For now just sleep */
-		int elapsed_time, curtime = 0;
-		struct timeval tv;
-
-		newpid = c->init_pid(c);
-		if (newpid != -1 && newpid != pid)
-			return 0;
-
-		if (timeout != -1) {
-			ret = gettimeofday(&tv, NULL);
-			if (ret)
-				break;
-			curtime = tv.tv_sec;
-		}
-
-		sleep(1);
-		if (timeout != -1) {
-			ret = gettimeofday(&tv, NULL);
-			if (ret)
-				break;
-			elapsed_time = tv.tv_sec - curtime;
-			if (timeout - elapsed_time <= 0)
-				break;
-			timeout -= elapsed_time;
-		}
-	}
-
-out:
-	newpid = c->init_pid(c);
-	if (newpid == -1 || newpid == pid) {
-		printf("Reboot did not complete before timeout\n");
-		return -1;
-	}
-	return 0;
-}
-
 int main(int argc, char *argv[])
 {
 	struct lxc_container *c;
+	struct lxc_log log;
 	bool s;
 	int ret = EXIT_FAILURE;
 
 	if (lxc_arguments_parse(&my_args, argc, argv))
 		exit(ret);
 
-	if (lxc_log_init(my_args.name, my_args.log_file, my_args.log_priority,
-			 my_args.progname, my_args.quiet, my_args.lxcpath[0]))
+	log.name = my_args.name;
+	log.file = my_args.log_file;
+	log.level = my_args.log_priority;
+	log.prefix = my_args.progname;
+	log.quiet = my_args.quiet;
+	log.lxcpath = my_args.lxcpath[0];
+
+	if (lxc_log_init(&log))
 		exit(ret);
-	lxc_log_options_no_override();
 
 	/* Set default timeout */
 	if (my_args.timeout == -2) {
-		if (my_args.hardstop) {
+		if (my_args.hardstop)
 			my_args.timeout = 0;
-		}
-		else {
+		else
 			my_args.timeout = 60;
-		}
 	}
 
-	if (my_args.nowait) {
+	if (my_args.nowait)
 		my_args.timeout = 0;
-	}
 
 	/* some checks */
 	if (!my_args.hardstop && my_args.timeout < -1) {
@@ -190,13 +148,6 @@ int main(int argc, char *argv[])
 
 	if (my_args.nolock && !my_args.hardstop) {
 		fprintf(stderr, "--nolock may only be used with -k\n");
-		exit(ret);
-	}
-
-	/* shortcut - if locking is bogus, we should be able to kill
-	 * containers at least */
-	if (my_args.nolock) {
-		ret = lxc_cmd_stop(my_args.name, my_args.lxcpath[0]);
 		exit(ret);
 	}
 
@@ -241,7 +192,11 @@ int main(int argc, char *argv[])
 
 	/* reboot */
 	if (my_args.reboot) {
-		ret = do_reboot_and_check(&my_args, c) < 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+		ret = c->reboot2(c, my_args.timeout);
+		if (ret < 0)
+			ret = EXIT_FAILURE;
+		else
+			ret = EXIT_SUCCESS;
 		goto out;
 	}
 

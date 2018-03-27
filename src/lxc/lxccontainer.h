@@ -51,6 +51,8 @@ struct lxc_lock;
 
 struct migrate_opts;
 
+struct lxc_console_log;
+
 /*!
  * An LXC container.
  *
@@ -59,7 +61,7 @@ struct migrate_opts;
  * changes, whenever possible stick to simply appending new members.
  */
 struct lxc_container {
-	// private fields
+	/* private fields */
 	/*!
 	 * \private
 	 * Name of container.
@@ -105,7 +107,7 @@ struct lxc_container {
 	 */
 	struct lxc_conf *lxc_conf;
 
-	// public fields
+	/* public fields */
 	/*! Human-readable string representing last error */
 	char *error_string;
 
@@ -408,8 +410,8 @@ struct lxc_container {
 	 *  \p retv by initially passing its value as \c NULL and considering the return value.
 	 *  This function can then be called again passing a newly-allocated suitably-sized buffer.
 	 * \note If \p retv is NULL, \p inlen is ignored.
-	 * \note If \p inlen is smaller than required, the value written
-	 *  to \p retv will be truncated.
+	 * \note If \p inlen is smaller than required, nothing will be written to \p retv and still return
+	 *  the length of config item value.
 	 */
 	int (*get_config_item)(struct lxc_container *c, const char *key, char *retv, int inlen);
 
@@ -823,6 +825,27 @@ struct lxc_container {
 	 * \return \c 0 on success, nonzero on failure.
 	 */
 	int (*migrate)(struct lxc_container *c, unsigned int cmd, struct migrate_opts *opts, unsigned int size);
+
+	/*!
+	 * \brief Query the console log of a container.
+	 *
+	 * \param c Container.
+	 * \param opts A lxc_console_log struct filled with relevant options.
+	 *
+	 * \return \c 0 on success, nonzero on failure.
+	 */
+	int (*console_log)(struct lxc_container *c, struct lxc_console_log *log);
+
+	/*!
+	 * \brief Request the container reboot by sending it \c SIGINT.
+	 *
+	 * \param c Container.
+	 * \param timeout Seconds to wait before returning false.
+	 *  (-1 to wait forever, 0 to avoid waiting).
+	 *
+	 * \return \c true if the container was rebooted successfully, else \c false.
+	 */
+	bool (*reboot2)(struct lxc_container *c, int timeout);
 };
 
 /*!
@@ -870,7 +893,14 @@ enum {
 	MIGRATE_PRE_DUMP,
 	MIGRATE_DUMP,
 	MIGRATE_RESTORE,
+	MIGRATE_FEATURE_CHECK,
 };
+
+/*!
+ * \brief Available feature checks.
+ */
+#define FEATURE_MEM_TRACK    (1ULL << 0)
+#define FEATURE_LAZY_PAGES   (1ULL << 1)
 
 /*!
  * \brief Options for the migrate API call.
@@ -908,6 +938,35 @@ struct migrate_opts {
 	 * which at this time is 1MB.
 	 */
 	uint64_t ghost_limit;
+
+	/* Some features cannot be checked by comparing the CRIU version.
+	 * Features like dirty page tracking or userfaultfd depend on
+	 * the architecture/kernel/criu combination. This is a bitmask
+	 * in which the desired feature checks can be encoded.
+	 */
+	uint64_t features_to_check;
+};
+
+struct lxc_console_log {
+	/* Clear the console log. */
+	bool clear;
+
+	/* Retrieve the console log. */
+	bool read;
+
+	/* This specifies the maximum size to read from the ringbuffer. Setting
+	 * it to 0 means that the a read can be as big as the whole ringbuffer.
+	 * On return callers can check how many bytes were actually read.
+	 * If "read" and "clear" are set to false and a non-zero value is
+	 * specified then up to "read_max" bytes of data will be discarded from
+	 * the ringbuffer.
+	 */
+	uint64_t *read_max;
+
+	/* Data that was read from the ringbuffer. If "read_max" is 0 on return
+	 * "data" is invalid.
+	 */
+	char *data;
 };
 
 /*!
@@ -1017,10 +1076,33 @@ int list_active_containers(const char *lxcpath, char ***names, struct lxc_contai
  */
 int list_all_containers(const char *lxcpath, char ***names, struct lxc_container ***cret);
 
+struct lxc_log {
+	const char *name;
+	const char *lxcpath;
+	const char *file;
+	const char *level;
+	const char *prefix;
+	bool quiet;
+};
+
+/*!
+ *\brief Initialize the log
+ *
+ *\param log lxc log configuration.
+ */
+int lxc_log_init(struct lxc_log *log);
+
 /*!
  * \brief Close log file.
  */
 void lxc_log_close(void);
+
+/*!
+ * \brief Check if the configuration item is supported by this LXC instance.
+ *
+ * \param key Configuration item to check for.
+ */
+bool lxc_config_item_is_supported(const char *key);
 
 #ifdef  __cplusplus
 }

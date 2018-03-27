@@ -9,12 +9,14 @@ varlib="@LOCALSTATEDIR@/lib"
 
 USE_LXC_BRIDGE="true"
 LXC_BRIDGE="lxcbr0"
+LXC_BRIDGE_MAC="00:16:3e:00:00:00"
 LXC_ADDR="10.0.3.1"
 LXC_NETMASK="255.255.255.0"
 LXC_NETWORK="10.0.3.0/24"
 LXC_DHCP_RANGE="10.0.3.2,10.0.3.254"
 LXC_DHCP_MAX="253"
 LXC_DHCP_CONFILE=""
+LXC_DHCP_PING="true"
 LXC_DOMAIN=""
 
 LXC_IPV6_ADDR=""
@@ -36,16 +38,17 @@ _netmask2cidr ()
     echo $(( $2 + (${#x}/4) ))
 }
 
-ifdown() {
-    ip addr flush dev $1
-    ip link set dev $1 down
+_ifdown() {
+    ip addr flush dev ${LXC_BRIDGE}
+    ip link set dev ${LXC_BRIDGE} down
 }
 
-ifup() {
+_ifup() {
     MASK=`_netmask2cidr ${LXC_NETMASK}`
     CIDR_ADDR="${LXC_ADDR}/${MASK}"
-    ip addr add ${CIDR_ADDR} dev $1
-    ip link set dev $1 up
+    ip addr add ${CIDR_ADDR} dev ${LXC_BRIDGE}
+    ip link set dev ${LXC_BRIDGE} address $LXC_BRIDGE_MAC
+    ip link set dev ${LXC_BRIDGE} up
 }
 
 start() {
@@ -64,6 +67,7 @@ start() {
         if [ "$FAILED" = "1" ]; then
             echo "Failed to setup lxc-net." >&2
             stop force
+            exit 1
         fi
     }
 
@@ -85,7 +89,7 @@ start() {
         fi
     fi
 
-    ifup ${LXC_BRIDGE} ${LXC_ADDR} ${LXC_NETMASK}
+    _ifup
 
     LXC_IPV6_ARG=""
     if [ -n "$LXC_IPV6_ADDR" ] && [ -n "$LXC_IPV6_MASK" ] && [ -n "$LXC_IPV6_NETWORK" ]; then
@@ -111,7 +115,7 @@ start() {
         LXC_DOMAIN_ARG="-s $LXC_DOMAIN -S /$LXC_DOMAIN/"
     fi
 
-    LXD_DHCP_CONFILE_ARG=""
+    LXC_DHCP_CONFILE_ARG=""
     if [ -n "$LXC_DHCP_CONFILE" ]; then
         LXC_DHCP_CONFILE_ARG="--conf-file=${LXC_DHCP_CONFILE}"
     fi
@@ -124,7 +128,12 @@ start() {
         fi
     done
 
-    dnsmasq $LXC_DHCP_CONFILE_ARG $LXC_DOMAIN_ARG -u ${DNSMASQ_USER} \
+    LXC_DHCP_PING_ARG=""
+    if [ "x$LXC_DHCP_PING" = "xfalse" ]; then
+        LXC_DHCP_PING_ARG="--no-ping"
+    fi
+
+    dnsmasq $LXC_DHCP_CONFILE_ARG $LXC_DOMAIN_ARG $LXC_DHCP_PING_ARG -u ${DNSMASQ_USER} \
             --strict-order --bind-interfaces --pid-file="${varrun}"/dnsmasq.pid \
             --listen-address ${LXC_ADDR} --dhcp-range ${LXC_DHCP_RANGE} \
             --dhcp-lease-max=${LXC_DHCP_MAX} --dhcp-no-override \
@@ -142,7 +151,7 @@ stop() {
     [ -f "${varrun}/network_up" ] || [ "$1" = "force" ] || { echo "lxc-net isn't running"; exit 1; }
 
     if [ -d /sys/class/net/${LXC_BRIDGE} ]; then
-        ifdown ${LXC_BRIDGE}
+        _ifdown 
         iptables $use_iptables_lock -D INPUT -i ${LXC_BRIDGE} -p udp --dport 67 -j ACCEPT
         iptables $use_iptables_lock -D INPUT -i ${LXC_BRIDGE} -p tcp --dport 67 -j ACCEPT
         iptables $use_iptables_lock -D INPUT -i ${LXC_BRIDGE} -p udp --dport 53 -j ACCEPT

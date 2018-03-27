@@ -22,31 +22,24 @@
  */
 
 #define _GNU_SOURCE
-#include <stdio.h>
-#undef _GNU_SOURCE
-#include <stdlib.h>
 #include <errno.h>
-#include <string.h>
 #include <fcntl.h>
-#include <unistd.h>
-#include <signal.h>
 #include <libgen.h>
 #include <poll.h>
-#include <sys/param.h>
-#include <sys/types.h>
-#include <sys/stat.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <string.h>
+#include <unistd.h>
 #include <sys/ioctl.h>
+#include <sys/param.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include <lxc/lxccontainer.h>
 
-#include "error.h"
-#include "lxc.h"
-#include "log.h"
-#include "mainloop.h"
 #include "arguments.h"
-#include "commands.h"
-
-lxc_log_define(lxc_console_ui, lxc);
+#include "tool_utils.h"
 
 static char etoc(const char *expr)
 {
@@ -58,8 +51,13 @@ static char etoc(const char *expr)
 static int my_parser(struct lxc_arguments* args, int c, char* arg)
 {
 	switch (c) {
-	case 't': args->ttynum = atoi(arg); break;
-	case 'e': args->escape = etoc(arg); break;
+	case 't':
+		if (lxc_safe_uint(arg, &args->ttynum) < 0)
+			return -1;
+		break;
+	case 'e':
+		args->escape = etoc(arg);
+		break;
 	}
 	return 0;
 }
@@ -93,6 +91,7 @@ int main(int argc, char *argv[])
 {
 	int ret;
 	struct lxc_container *c;
+	struct lxc_log log;
 
 	ret = lxc_arguments_parse(&my_args, argc, argv);
 	if (ret)
@@ -101,11 +100,16 @@ int main(int argc, char *argv[])
 	if (!my_args.log_file)
 		my_args.log_file = "none";
 
-	ret = lxc_log_init(my_args.name, my_args.log_file, my_args.log_priority,
-			   my_args.progname, my_args.quiet, my_args.lxcpath[0]);
+	log.name = my_args.name;
+	log.file = my_args.log_file;
+	log.level = my_args.log_priority;
+	log.prefix = my_args.progname;
+	log.quiet = my_args.quiet;
+	log.lxcpath = my_args.lxcpath[0];
+
+	ret = lxc_log_init(&log);
 	if (ret)
 		return EXIT_FAILURE;
-	lxc_log_options_no_override();
 
 	c = lxc_container_new(my_args.name, my_args.lxcpath[0]);
 	if (!c) {

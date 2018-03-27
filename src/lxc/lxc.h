@@ -36,6 +36,7 @@ extern "C" {
 struct lxc_msg;
 struct lxc_conf;
 struct lxc_arguments;
+struct lxc_handler;
 
 /**
  Following code is for liblxc.
@@ -51,8 +52,9 @@ struct lxc_arguments;
  * @backgrounded : whether or not the container is daemonized
  * Returns 0 on success, < 0 otherwise
  */
-extern int lxc_start(const char *name, char *const argv[], struct lxc_conf *conf,
-		     const char *lxcpath, bool backgrounded);
+extern int lxc_start(const char *name, char *const argv[],
+		     struct lxc_handler *handler, const char *lxcpath,
+		     bool backgrounded, int *error_num);
 
 /*
  * Start the specified command inside an application container
@@ -64,8 +66,8 @@ extern int lxc_start(const char *name, char *const argv[], struct lxc_conf *conf
  * Returns 0 on success, < 0 otherwise
  */
 extern int lxc_execute(const char *name, char *const argv[], int quiet,
-		       struct lxc_conf *conf, const char *lxcpath,
-		       bool backgrounded);
+		       struct lxc_handler *handler, const char *lxcpath,
+		       bool backgrounded, int *error_num);
 
 /*
  * Close the fd associated with the monitoring
@@ -146,6 +148,13 @@ extern int lxc_get_wait_states(const char **states);
  * Add a dependency to a container
  */
 extern int add_rdepend(struct lxc_conf *lxc_conf, char *rdepend);
+
+/*
+ * Set a key/value configuration option. Requires that to take a lock on the
+ * in-memory config of the container.
+ */
+extern int lxc_set_config_item_locked(struct lxc_conf *conf, const char *key,
+				      const char *v);
 
 #ifdef __cplusplus
 }

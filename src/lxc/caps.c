@@ -22,20 +22,21 @@
  */
 
 #define _GNU_SOURCE
-#include <unistd.h>
+#include "config.h"
+
+#include <errno.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <stdlib.h>
-#include <limits.h>
+#include <unistd.h>
 #include <sys/prctl.h>
-#include <errno.h>
 
-#include "config.h"
+#include "caps.h"
 #include "log.h"
 
 lxc_log_define(lxc_caps, lxc);
 
-#if HAVE_SYS_CAPABILITY_H
-#include <sys/capability.h>
+#if HAVE_LIBCAP
 
 #ifndef PR_CAPBSET_READ
 #define PR_CAPBSET_READ 23
@@ -53,19 +54,19 @@ int lxc_caps_down(void)
 
 	caps = cap_get_proc();
 	if (!caps) {
-		ERROR("failed to cap_get_proc: %m");
+		ERROR("failed to cap_get_proc: %s", strerror(errno));
 		return -1;
 	}
 
 	ret = cap_clear_flag(caps, CAP_EFFECTIVE);
 	if (ret) {
-		ERROR("failed to cap_clear_flag: %m");
+		ERROR("failed to cap_clear_flag: %s", strerror(errno));
 		goto out;
 	}
 
 	ret = cap_set_proc(caps);
 	if (ret) {
-		ERROR("failed to cap_set_proc: %m");
+		ERROR("failed to cap_set_proc: %s", strerror(errno));
 		goto out;
 	}
 
@@ -87,7 +88,7 @@ int lxc_caps_up(void)
 
 	caps = cap_get_proc();
 	if (!caps) {
-		ERROR("failed to cap_get_proc: %m");
+		ERROR("failed to cap_get_proc: %s", strerror(errno));
 		return -1;
 	}
 
@@ -101,21 +102,22 @@ int lxc_caps_up(void)
 				INFO("Last supported cap was %d", cap-1);
 				break;
 			} else {
-				ERROR("failed to cap_get_flag: %m");
+				ERROR("failed to cap_get_flag: %s",
+				      strerror(errno));
 				goto out;
 			}
 		}
 
 		ret = cap_set_flag(caps, CAP_EFFECTIVE, 1, &cap, flag);
 		if (ret) {
-			ERROR("failed to cap_set_flag: %m");
+			ERROR("failed to cap_set_flag: %s", strerror(errno));
 			goto out;
 		}
 	}
 
 	ret = cap_set_proc(caps);
 	if (ret) {
-		ERROR("failed to cap_set_proc: %m");
+		ERROR("failed to cap_set_proc: %s", strerror(errno));
 		goto out;
 	}
 
@@ -139,22 +141,26 @@ int lxc_caps_init(void)
 		INFO("command is run as setuid root (uid : %d)", uid);
 
 		if (prctl(PR_SET_KEEPCAPS, 1)) {
-			ERROR("failed to 'PR_SET_KEEPCAPS': %m");
+			ERROR("failed to 'PR_SET_KEEPCAPS': %s",
+			      strerror(errno));
 			return -1;
 		}
 
 		if (setresgid(gid, gid, gid)) {
-			ERROR("failed to change gid to '%d': %m", gid);
+			ERROR("failed to change gid to '%d': %s", gid,
+			      strerror(errno));
 			return -1;
 		}
 
 		if (setresuid(uid, uid, uid)) {
-			ERROR("failed to change uid to '%d': %m", uid);
+			ERROR("failed to change uid to '%d': %s", uid,
+			      strerror(errno));
 			return -1;
 		}
 
 		if (lxc_caps_up()) {
-			ERROR("failed to restore capabilities: %m");
+			ERROR("failed to restore capabilities: %s",
+			      strerror(errno));
 			return -1;
 		}
 	}
@@ -206,6 +212,63 @@ int lxc_caps_last_cap(void)
 	if (last_cap < 0) last_cap = _real_caps_last_cap();
 
 	return last_cap;
+}
+
+static bool lxc_cap_is_set(cap_t caps, cap_value_t cap, cap_flag_t flag)
+{
+	int ret;
+	cap_flag_value_t flagval;
+
+	ret = cap_get_flag(caps, cap, flag, &flagval);
+	if (ret < 0) {
+		ERROR("Failed to perform cap_get_flag(): %s.", strerror(errno));
+		return false;
+	}
+
+	return flagval == CAP_SET;
+}
+
+bool lxc_file_cap_is_set(const char *path, cap_value_t cap, cap_flag_t flag)
+{
+	#if LIBCAP_SUPPORTS_FILE_CAPABILITIES
+	bool cap_is_set;
+	cap_t caps;
+
+	caps = cap_get_file(path);
+	if (!caps) {
+		/* This is undocumented in the manpage but the source code show
+		 * that cap_get_file() may return NULL when successful for the
+		 * case where it didn't detect any file capabilities. In this
+		 * case errno will be set to ENODATA.
+		 */
+		if (errno != ENODATA)
+			ERROR("Failed to perform cap_get_file(): %s.\n", strerror(errno));
+		return false;
+	}
+
+	cap_is_set = lxc_cap_is_set(caps, cap, flag);
+	cap_free(caps);
+	return cap_is_set;
+	#else
+	errno = ENODATA;
+	return false;
+	#endif
+}
+
+bool lxc_proc_cap_is_set(cap_value_t cap, cap_flag_t flag)
+{
+	bool cap_is_set;
+	cap_t caps;
+
+	caps = cap_get_proc();
+	if (!caps) {
+		ERROR("Failed to perform cap_get_proc(): %s.\n", strerror(errno));
+		return false;
+	}
+
+	cap_is_set = lxc_cap_is_set(caps, cap, flag);
+	cap_free(caps);
+	return cap_is_set;
 }
 
 #endif

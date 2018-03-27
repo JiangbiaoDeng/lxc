@@ -40,10 +40,8 @@ static int destroy_container(void)
 		return -1;
 	}
 	if (pid == 0) {
-		ret = execlp("lxc-destroy", "lxc-destroy", "-f", "-n", MYNAME, NULL);
-		// Should not return
-		perror("execl");
-		exit(1);
+		execlp("lxc-destroy", "lxc-destroy", "-f", "-n", MYNAME, NULL);
+		exit(EXIT_FAILURE);
 	}
 again:
 	ret = waitpid(pid, &status, 0);
@@ -72,10 +70,8 @@ static int create_container(void)
 		return -1;
 	}
 	if (pid == 0) {
-		ret = execlp("lxc-create", "lxc-create", "-t", "busybox", "-n", MYNAME, NULL);
-		// Should not return
-		perror("execl");
-		exit(1);
+		execlp("lxc-create", "lxc-create", "-t", "busybox", "-n", MYNAME, NULL);
+		exit(EXIT_FAILURE);
 	}
 again:
 	ret = waitpid(pid, &status, 0);
@@ -154,8 +150,8 @@ int main(int argc, char *argv[])
 		goto out;
 	}
 
-	if (!c->set_config_item(c, "lxc.utsname", "bobo")) {
-		fprintf(stderr, "%d: failed setting lxc.utsname\n", __LINE__);
+	if (!c->set_config_item(c, "lxc.uts.name", "bobo")) {
+		fprintf(stderr, "%d: failed setting lxc.uts.name\n", __LINE__);
 		goto out;
 	}
 

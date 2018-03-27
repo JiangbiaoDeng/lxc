@@ -17,44 +17,33 @@
  */
 
 #define _GNU_SOURCE
-#include "config.h"
-
-#include <unistd.h>
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <signal.h>
-#include <stdio.h>
-#include <sys/types.h>
-#include <stdint.h>
-#include <sys/wait.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <ctype.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <time.h>
 #include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #include <lxc/lxccontainer.h>
 
-#include "attach.h"
-#include "bdev.h"
-#include "log.h"
-#include "confile.h"
 #include "arguments.h"
-#include "lxc.h"
-#include "conf.h"
-#include "state.h"
-#include "utils.h"
+#include "tool_utils.h"
 
 #ifndef HAVE_GETSUBOPT
-#include <../include/getsubopt.h>
+#include "include/getsubopt.h"
 #endif
-
-lxc_log_define(lxc_copy_ui, lxc);
 
 enum mnttype {
 	LXC_MNT_BIND,
-	LXC_MNT_AUFS,
 	LXC_MNT_OVL,
 };
 
@@ -94,7 +83,6 @@ static const struct option my_longopts[] = {
 /* mount keys */
 static char *const keys[] = {
 	[LXC_MNT_BIND] = "bind",
-	[LXC_MNT_AUFS] = "aufs",
 	[LXC_MNT_OVL] = "overlay",
 	NULL
 };
@@ -103,7 +91,7 @@ static struct lxc_arguments my_args = {
 	.progname = "lxc-copy",
 	.help = "\n\
 --name=NAME [-P lxcpath] -N newname [-p newpath] [-B backingstorage] [-s] [-K] [-M] [-L size [unit]] -- hook options\n\
---name=NAME [-P lxcpath] [-N newname] [-p newpath] [-B backingstorage] -e [-d] [-D] [-K] [-M] [-m {bind,aufs,overlay}=/src:/dest] -- hook options\n\
+--name=NAME [-P lxcpath] [-N newname] [-p newpath] [-B backingstorage] -e [-d] [-D] [-K] [-M] [-m {bind,overlay}=/src:/dest] -- hook options\n\
 --name=NAME [-P lxcpath] -N newname -R\n\
 \n\
 lxc-copy clone a container\n\
@@ -118,7 +106,7 @@ Options :\n\
   -d, --daemon              daemonize the container (default)\n\
   -e, --ephemeral           start ephemeral container\n\
   -m, --mount               directory to mount into container, either \n\
-                            {bind,aufs,overlay}=/src-path or {bind,aufs,overlay}=/src-path:/dst-path\n\
+                            {bind,overlay}=/src-path or {bind,overlay}=/src-path:/dst-path\n\
   -B, --backingstorage=TYPE backingstorage type for the container\n\
   -t, --tmpfs               place ephemeral container on a tmpfs\n\
                             (WARNING: On reboot all changes made to the container will be lost.)\n\
@@ -156,19 +144,19 @@ static uint64_t get_fssize(char *s);
 
 /* Place an ephemeral container started with -e flag on a tmpfs. Restrictions
  * are that you cannot request the data to be kept while placing the container
- * on a tmpfs and that either overlay or aufs backing storage must be used.
+ * on a tmpfs and that either overlay storage driver must be used.
  */
 static char *mount_tmpfs(const char *oldname, const char *newname,
 			 const char *path, struct lxc_arguments *arg);
 static int parse_mntsubopts(char *subopts, char *const *keys,
 			    char *mntparameters);
-static int parse_aufs_mnt(char *mntstring, enum mnttype type);
 static int parse_bind_mnt(char *mntstring, enum mnttype type);
 static int parse_ovl_mnt(char *mntstring, enum mnttype type);
 
 int main(int argc, char *argv[])
 {
 	struct lxc_container *c;
+	struct lxc_log log;
 	int flags = 0;
 	int ret = EXIT_FAILURE;
 
@@ -178,13 +166,18 @@ int main(int argc, char *argv[])
 	if (!my_args.log_file)
 		my_args.log_file = "none";
 
-	if (lxc_log_init(my_args.name, my_args.log_file, my_args.log_priority,
-			 my_args.progname, my_args.quiet, my_args.lxcpath[0]))
+	log.name = my_args.name;
+	log.file = my_args.log_file;
+	log.level = my_args.log_priority;
+	log.prefix = my_args.progname;
+	log.quiet = my_args.quiet;
+	log.lxcpath = my_args.lxcpath[0];
+
+	if (lxc_log_init(&log))
 		exit(ret);
-	lxc_log_options_no_override();
 
 	if (geteuid()) {
-		if (access(my_args.lxcpath[0], O_RDWR) < 0) {
+		if (access(my_args.lxcpath[0], O_RDONLY) < 0) {
 			if (!my_args.quiet)
 				fprintf(stderr, "You lack access to %s\n", my_args.lxcpath[0]);
 			exit(ret);
@@ -265,17 +258,17 @@ static struct mnts *add_mnt(struct mnts **mnts, unsigned int *num, enum mnttype 
 
 static int mk_rand_ovl_dirs(struct mnts *mnts, unsigned int num, struct lxc_arguments *arg)
 {
-	char upperdir[MAXPATHLEN];
-	char workdir[MAXPATHLEN];
+	char upperdir[TOOL_MAXPATHLEN];
+	char workdir[TOOL_MAXPATHLEN];
 	unsigned int i;
 	int ret;
 	struct mnts *m = NULL;
 
 	for (i = 0, m = mnts; i < num; i++, m++) {
-		if ((m->mnt_type == LXC_MNT_OVL) || (m->mnt_type == LXC_MNT_AUFS)) {
-			ret = snprintf(upperdir, MAXPATHLEN, "%s/%s/delta#XXXXXX",
+		if (m->mnt_type == LXC_MNT_OVL) {
+			ret = snprintf(upperdir, TOOL_MAXPATHLEN, "%s/%s/delta#XXXXXX",
 					arg->newpath, arg->newname);
-			if (ret < 0 || ret >= MAXPATHLEN)
+			if (ret < 0 || ret >= TOOL_MAXPATHLEN)
 				return -1;
 			if (!mkdtemp(upperdir))
 				return -1;
@@ -285,9 +278,9 @@ static int mk_rand_ovl_dirs(struct mnts *mnts, unsigned int num, struct lxc_argu
 		}
 
 		if (m->mnt_type == LXC_MNT_OVL) {
-			ret = snprintf(workdir, MAXPATHLEN, "%s/%s/work#XXXXXX",
+			ret = snprintf(workdir, TOOL_MAXPATHLEN, "%s/%s/work#XXXXXX",
 					arg->newpath, arg->newname);
-			if (ret < 0 || ret >= MAXPATHLEN)
+			if (ret < 0 || ret >= TOOL_MAXPATHLEN)
 				return -1;
 			if (!mkdtemp(workdir))
 				return -1;
@@ -321,20 +314,7 @@ static char *set_mnt_entry(struct mnts *m)
 	int ret = 0;
 	size_t len = 0;
 
-	if (m->mnt_type == LXC_MNT_AUFS) {
-		len = strlen("  aufs br==rw:=ro,xino=,create=dir") +
-		      2 * strlen(m->src) + strlen(m->dest) + strlen(m->upper) +
-		      strlen(m->workdir) + 1;
-
-		mntentry = malloc(len);
-		if (!mntentry)
-			goto err;
-
-		ret = snprintf(mntentry, len, "%s %s aufs br=%s=rw:%s=ro,xino=%s,create=dir",
-			       m->src, m->dest, m->upper, m->src, m->workdir);
-		if (ret < 0 || (size_t)ret >= len)
-			goto err;
-	} else if (m->mnt_type == LXC_MNT_OVL) {
+	if (m->mnt_type == LXC_MNT_OVL) {
 		len = strlen("  overlay lowerdir=,upperdir=,workdir=,create=dir") +
 		      2 * strlen(m->src) + strlen(m->dest) + strlen(m->upper) +
 		      strlen(m->workdir) + 1;
@@ -384,8 +364,6 @@ static int do_clone(struct lxc_container *c, char *newname, char *newpath,
 		return -1;
 	}
 
-	INFO("Created %s as %s of %s\n", newname, task ? "snapshot" : "copy", c->name);
-
 	lxc_container_put(clone);
 
 	return 0;
@@ -394,24 +372,24 @@ static int do_clone(struct lxc_container *c, char *newname, char *newpath,
 static int do_clone_ephemeral(struct lxc_container *c,
 		struct lxc_arguments *arg, char **args, int flags)
 {
-	char *bdev;
 	char *premount;
-	char randname[MAXPATHLEN];
+	char randname[TOOL_MAXPATHLEN];
 	unsigned int i;
 	int ret = 0;
 	bool bret = true, started = false;
+	char *tmp_buf = randname;
 	struct lxc_container *clone;
 	lxc_attach_options_t attach_options = LXC_ATTACH_OPTIONS_DEFAULT;
 	attach_options.env_policy = LXC_ATTACH_CLEAR_ENV;
 
 	if (!arg->newname) {
-		ret = snprintf(randname, MAXPATHLEN, "%s/%s_XXXXXX", arg->newpath, arg->name);
-		if (ret < 0 || ret >= MAXPATHLEN)
+		ret = snprintf(randname, TOOL_MAXPATHLEN, "%s/%s_XXXXXX", arg->newpath, arg->name);
+		if (ret < 0 || ret >= TOOL_MAXPATHLEN)
 			return -1;
 		if (!mkdtemp(randname))
 			return -1;
 		if (chmod(randname, 0770) < 0) {
-			remove(randname);
+			(void)remove(randname);
 			return -1;
 		}
 		arg->newname = randname + strlen(arg->newpath) + 1;
@@ -423,12 +401,6 @@ static int do_clone_ephemeral(struct lxc_container *c,
 		return -1;
 
 	if (arg->tmpfs) {
-		bdev = c->lxc_conf->rootfs.bdev_type;
-		if (bdev && strcmp(bdev, "dir")) {
-			fprintf(stderr, "Cannot currently use tmpfs with %s storage backend.\n", bdev);
-			goto destroy_and_put;
-		}
-
 		premount = mount_tmpfs(arg->name, arg->newname, arg->newpath, arg);
 		if (!premount)
 			goto destroy_and_put;
@@ -495,7 +467,8 @@ static int do_clone_ephemeral(struct lxc_container *c,
 destroy_and_put:
 	if (started)
 		clone->shutdown(clone, -1);
-	if (!started || clone->lxc_conf->ephemeral != 1)
+	ret = clone->get_config_item(clone, "lxc.ephemeral", tmp_buf, TOOL_MAXPATHLEN);
+	if (ret > 0 && strcmp(tmp_buf, "0"))
 		clone->destroy(clone);
 	free_mnts();
 	lxc_container_put(clone);
@@ -505,11 +478,9 @@ destroy_and_put:
 static int do_clone_rename(struct lxc_container *c, char *newname)
 {
 	if (!c->rename(c, newname)) {
-		ERROR("Error: Renaming container %s to %s failed\n", c->name, newname);
+		fprintf(stderr, "Error: Renaming container %s to %s failed\n", c->name, newname);
 		return -1;
 	}
-
-	INFO("Renamed container %s to %s\n", c->name, newname);
 
 	return 0;
 }
@@ -568,7 +539,7 @@ static uint64_t get_fssize(char *s)
 	while (isblank(*end))
 		end++;
 	if (*end == '\0') {
-		ret *= 1024ULL * 1024ULL; // MB by default
+		ret *= 1024ULL * 1024ULL; /* MB by default */
 	} else if (*end == 'b' || *end == 'B') {
 		ret *= 1ULL;
 	} else if (*end == 'k' || *end == 'K') {
@@ -644,49 +615,6 @@ static int my_parser(struct lxc_arguments *args, int c, char *arg)
 	return 0;
 }
 
-static int parse_aufs_mnt(char *mntstring, enum mnttype type)
-{
-	int len = 0;
-	const char *xinopath = "/dev/shm/aufs.xino";
-	char **mntarray = NULL;
-	struct mnts *m = NULL;
-
-	m = add_mnt(&mnt_table, &mnt_table_size, type);
-	if (!m)
-		goto err;
-
-	mntarray = lxc_string_split(mntstring, ':');
-	if (!mntarray)
-		goto err;
-
-	m->src = construct_path(mntarray[0], true);
-	if (!m->src)
-		goto err;
-
-	len = lxc_array_len((void **)mntarray);
-	if (len == 1) /* aufs=src */
-		m->dest = construct_path(mntarray[0], false);
-	else if (len == 2) /* aufs=src:dest */
-		m->dest = construct_path(mntarray[1], false);
-	else
-		INFO("Excess elements in mount specification");
-
-	if (!m->dest)
-		goto err;
-
-	m->workdir = strdup(xinopath);
-	if (!m->workdir)
-		goto err;
-
-	lxc_free_array((void **)mntarray, free);
-	return 0;
-
-err:
-	free_mnts();
-	lxc_free_array((void **)mntarray, free);
-	return -1;
-}
-
 static int parse_bind_mnt(char *mntstring, enum mnttype type)
 {
 	int len = 0;
@@ -723,7 +651,7 @@ static int parse_bind_mnt(char *mntstring, enum mnttype type)
 			m->dest = construct_path(mntarray[1], false);
 			m->options = strdup(mntarray[2]);
 	} else {
-		INFO("Excess elements in mount specification");
+		printf("Excess elements in mount specification\n");
 	}
 
 	if (!m->dest)
@@ -757,10 +685,6 @@ static int parse_mntsubopts(char *subopts, char *const *keys, char *mntparameter
 			if (parse_ovl_mnt(mntparameters, LXC_MNT_OVL) < 0)
 				return -1;
 			break;
-		case LXC_MNT_AUFS:
-			if (parse_aufs_mnt(mntparameters, LXC_MNT_AUFS) < 0)
-				return -1;
-			break;
 		default:
 			break;
 		}
@@ -792,7 +716,7 @@ static int parse_ovl_mnt(char *mntstring, enum mnttype type)
 	else if (len == 2) /* overlay=src:dest */
 		m->dest = construct_path(mntarray[1], false);
 	else
-		INFO("Excess elements in mount specification");
+		printf("Excess elements in mount specification\n");
 
 	if (!m->dest)
 		goto err;
@@ -806,7 +730,7 @@ err:
 	return -1;
 }
 
-/* For ephemeral snapshots backed by overlay or aufs filesystems, this function
+/* For ephemeral snapshots backed by the overlay filesystem, this function
  * mounts a fresh tmpfs over the containers directory if the user requests it.
  * Because we mount a fresh tmpfs over the directory of the container the
  * updated /etc/hostname file created during the clone residing in the upperdir
@@ -824,18 +748,19 @@ static char *mount_tmpfs(const char *oldname, const char *newname,
 	FILE *fp;
 
 	if (arg->tmpfs && arg->keepdata) {
-		fprintf(stderr, "%s\n", "A container can only be placed on a "
-					"tmpfs when storage backend is overlay "
-					"or aufs.");
+		fprintf(stderr, "%s\n",
+			"A container can only be placed on a tmpfs when the "
+			"overlay storage driver is used");
 		goto err_free;
 	}
 
 	if (arg->tmpfs && !arg->bdevtype) {
 		arg->bdevtype = "overlayfs";
-	} else if (arg->tmpfs && arg->bdevtype && strcmp(arg->bdevtype, "overlayfs") && strcmp(arg->bdevtype, "aufs")) {
-		fprintf(stderr, "%s\n", "A container can only be placed on a "
-					"tmpfs when storage backend is overlay "
-					"or aufs.");
+	} else if (arg->tmpfs && arg->bdevtype &&
+		   strcmp(arg->bdevtype, "overlayfs") != 0) {
+		fprintf(stderr, "%s\n",
+			"A container can only be placed on a tmpfs when the "
+			"overlay storage driver is used");
 		goto err_free;
 	}
 
@@ -853,7 +778,7 @@ static char *mount_tmpfs(const char *oldname, const char *newname,
 		goto err_free;
 
 	if (fcntl(fd, F_SETFD, FD_CLOEXEC)) {
-		SYSERROR("Failed to set close-on-exec on file descriptor.");
+		fprintf(stderr, "Failed to set close-on-exec on file descriptor.\n");
 		goto err_close;
 	}
 

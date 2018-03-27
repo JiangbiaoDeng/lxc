@@ -20,57 +20,77 @@
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
+
 #define _GNU_SOURCE
-#include <stdio.h>
-#include <stdlib.h>
 #include <errno.h>
 #include <libgen.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <sys/param.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
-#include "caps.h"
-#include "lxc.h"
-#include "log.h"
-#include "conf.h"
-#include "confile.h"
+#include <lxc/lxccontainer.h>
+
 #include "arguments.h"
-#include "config.h"
-#include "start.h"
-#include "utils.h"
-
-lxc_log_define(lxc_execute_ui, lxc);
+#include "tool_list.h"
+#include "tool_utils.h"
 
 static struct lxc_list defines;
 
-static int my_checker(const struct lxc_arguments* args)
-{
-	if (!args->argc) {
-		lxc_error(args, "missing command to execute !");
-		return -1;
-	}
-
-	return 0;
-}
-
 static int my_parser(struct lxc_arguments* args, int c, char* arg)
 {
+	int ret;
+
 	switch (c) {
-	case 'f': args->rcfile = arg; break;
-	case 's': return lxc_config_define_add(&defines, arg); break;
-	case 'u': args->uid = atoi(arg); break;
-	case 'g': args->gid = atoi(arg);
+	case 'd':
+		args->daemonize = 1;
+		break;
+	case 'f':
+		args->rcfile = arg;
+		break;
+	case 's':
+		ret = lxc_config_define_add(&defines, arg);
+		if (ret < 0)
+			lxc_config_define_free(&defines);
+		break;
+	case 'u':
+		if (lxc_safe_uint(arg, &args->uid) < 0)
+			return -1;
+		break;
+	case 'g':
+		if (lxc_safe_uint(arg, &args->gid) < 0)
+			return -1;
+		break;
+	case OPT_SHARE_NET:
+		args->share_ns[LXC_NS_NET] = arg;
+		break;
+	case OPT_SHARE_IPC:
+		args->share_ns[LXC_NS_IPC] = arg;
+		break;
+	case OPT_SHARE_UTS:
+		args->share_ns[LXC_NS_UTS] = arg;
+		break;
+	case OPT_SHARE_PID:
+		args->share_ns[LXC_NS_PID] = arg;
+		break;
 	}
 	return 0;
 }
 
 static const struct option my_longopts[] = {
+	{"daemon", no_argument, 0, 'd'},
 	{"rcfile", required_argument, 0, 'f'},
 	{"define", required_argument, 0, 's'},
 	{"uid", required_argument, 0, 'u'},
 	{"gid", required_argument, 0, 'g'},
+	{"share-net", required_argument, 0, OPT_SHARE_NET},
+	{"share-ipc", required_argument, 0, OPT_SHARE_IPC},
+	{"share-uts", required_argument, 0, OPT_SHARE_UTS},
+	{"share-pid", required_argument, 0, OPT_SHARE_PID},
 	LXC_COMMON_OPTIONS
 };
 
@@ -90,72 +110,137 @@ Options :\n\
   -g, --gid=GID        Execute COMMAND with GID inside the container\n",
 	.options  = my_longopts,
 	.parser   = my_parser,
-	.checker  = my_checker,
+	.daemonize = 0,
 };
+
+static bool set_argv(struct lxc_container *c, struct lxc_arguments *args)
+{
+	int ret;
+	char buf[TOOL_MAXPATHLEN];
+	char **components, **p;
+
+	ret = c->get_config_item(c, "lxc.execute.cmd", buf, TOOL_MAXPATHLEN);
+	if (ret < 0)
+		return false;
+
+	components = lxc_string_split_quoted(buf);
+	if (!components)
+		return false;
+
+	args->argv = components;
+	for (p = components; *p; p++)
+		args->argc++;
+
+	return true;
+}
 
 int main(int argc, char *argv[])
 {
-	char *rcfile;
-	struct lxc_conf *conf;
+	struct lxc_container *c;
+	struct lxc_log log;
+	int err = EXIT_FAILURE;
 	int ret;
+	bool bret;
 
 	lxc_list_init(&defines);
 
 	if (lxc_caps_init())
-		exit(EXIT_FAILURE);
+		exit(err);
 
 	if (lxc_arguments_parse(&my_args, argc, argv))
-		exit(EXIT_FAILURE);
+		exit(err);
 
-	if (lxc_log_init(my_args.name, my_args.log_file, my_args.log_priority,
-			 my_args.progname, my_args.quiet, my_args.lxcpath[0]))
-		exit(EXIT_FAILURE);
-	lxc_log_options_no_override();
+	log.name = my_args.name;
+	log.file = my_args.log_file;
+	log.level = my_args.log_priority;
+	log.prefix = my_args.progname;
+	log.quiet = my_args.quiet;
+	log.lxcpath = my_args.lxcpath[0];
 
-	/* rcfile is specified in the cli option */
-	if (my_args.rcfile)
-		rcfile = (char *)my_args.rcfile;
-	else {
-		int rc;
+	if (lxc_log_init(&log))
+		exit(err);
 
-		rc = asprintf(&rcfile, "%s/%s/config", my_args.lxcpath[0], my_args.name);
-		if (rc == -1) {
-			SYSERROR("failed to allocate memory");
-			exit(EXIT_FAILURE);
+	c = lxc_container_new(my_args.name, my_args.lxcpath[0]);
+	if (!c) {
+		fprintf(stderr, "Failed to create lxc_container\n");
+		exit(err);
+	}
+
+	if (my_args.rcfile) {
+		c->clear_config(c);
+		if (!c->load_config(c, my_args.rcfile)) {
+			fprintf(stderr, "Failed to load rcfile\n");
+			goto out;
 		}
-
-		/* container configuration does not exist */
-		if (access(rcfile, F_OK)) {
-			free(rcfile);
-			rcfile = NULL;
+		c->configfile = strdup(my_args.rcfile);
+		if (!c->configfile) {
+			fprintf(stderr, "Out of memory setting new config filename\n");
+			goto out;
 		}
 	}
 
-	conf = lxc_conf_init();
-	if (!conf) {
-		ERROR("failed to initialize configuration");
-		exit(EXIT_FAILURE);
+	if (!c->lxc_conf) {
+		fprintf(stderr, "Executing a container with no configuration file may crash the host\n");
+		goto out;
 	}
 
-	if (rcfile && lxc_config_read(rcfile, conf, NULL)) {
-		ERROR("failed to read configuration file");
-		exit(EXIT_FAILURE);
+	if (my_args.argc == 0) {
+		if (!set_argv(c, &my_args)) {
+			fprintf(stderr, "missing command to execute!\n");
+			goto out;
+		}
 	}
 
-	if (lxc_config_define_load(&defines, conf))
-		exit(EXIT_FAILURE);
+	bret = lxc_config_define_load(&defines, c);
+	if (!bret)
+		goto out;
 
-	if (my_args.uid)
-		conf->init_uid = my_args.uid;
+	if (my_args.uid) {
+		char buf[256];
 
-	if (my_args.gid)
-		conf->init_gid = my_args.gid;
+		ret = snprintf(buf, 256, "%d", my_args.uid);
+		if (ret < 0 || (size_t)ret >= 256)
+			goto out;
 
-	ret = lxc_execute(my_args.name, my_args.argv, my_args.quiet, conf, my_args.lxcpath[0], false);
+		bret = c->set_config_item(c, "lxc.init.uid", buf);
+		if (!bret)
+			goto out;
+	}
 
-	lxc_conf_free(conf);
+	if (my_args.gid) {
+		char buf[256];
 
-	if (ret < 0)
-		exit(EXIT_FAILURE);
-	exit(EXIT_SUCCESS);
+		ret = snprintf(buf, 256, "%d", my_args.gid);
+		if (ret < 0 || (size_t)ret >= 256)
+			goto out;
+
+		bret = c->set_config_item(c, "lxc.init.gid", buf);
+		if (!bret)
+			goto out;
+	}
+
+	if (!lxc_setup_shared_ns(&my_args, c))
+		goto out;
+
+	c->daemonize = my_args.daemonize == 1;
+	bret = c->start(c, 1, my_args.argv);
+	if (!bret) {
+		fprintf(stderr, "Failed run an application inside container\n");
+		goto out;
+	}
+	if (c->daemonize) {
+		err = EXIT_SUCCESS;
+	} else {
+		if (WIFEXITED(c->error_num)) {
+			err = WEXITSTATUS(c->error_num);
+		} else {
+			/* Try to die with the same signal the task did. */
+			kill(0, WTERMSIG(c->error_num));
+		}
+	}
+
+
+out:
+	lxc_container_put(c);
+	exit(err);
 }

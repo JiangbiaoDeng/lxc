@@ -21,7 +21,6 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 #define _GNU_SOURCE
-#include <assert.h>
 #include <inttypes.h>
 #include <linux/limits.h>
 #include <sched.h>
@@ -35,7 +34,6 @@
 
 #include "config.h"
 
-#include "bdev.h"
 #include "cgroup.h"
 #include "conf.h"
 #include "commands.h"
@@ -44,6 +42,7 @@
 #include "lxc.h"
 #include "lxclock.h"
 #include "network.h"
+#include "storage.h"
 #include "utils.h"
 
 #if IS_BIONIC
@@ -58,6 +57,7 @@
 #define CRIU_GITID_PATCHLEVEL	0
 
 #define CRIU_IN_FLIGHT_SUPPORT	"2.4"
+#define CRIU_EXTERNAL_NOT_VETH	"2.8"
 
 lxc_log_define(lxc_criu, lxc);
 
@@ -83,7 +83,7 @@ struct criu_opts {
 	/* The path that is bind mounted from /dev/console, if any. We don't
 	 * want to use `--ext-mount-map auto`'s result here because the pts
 	 * device may have a different path (e.g. if the pty number is
-	 * different) on the target host. NULL if lxc.console = "none".
+	 * different) on the target host. NULL if lxc.console.path = "none".
 	 */
 	char *console_name;
 
@@ -106,8 +106,8 @@ static int load_tty_major_minor(char *directory, char *output, int len)
 	f = fopen(path, "r");
 	if (!f) {
 		/* This means we're coming from a liblxc which didn't export
-		 * the tty info. In this case they had to have lxc.console =
-		 * none, so there's no problem restoring.
+		 * the tty info. In this case they had to have lxc.console.path
+		 * = * none, so there's no problem restoring.
 		 */
 		if (errno == ENOENT)
 			return 0;
@@ -126,6 +126,47 @@ static int load_tty_major_minor(char *directory, char *output, int len)
 	return 0;
 }
 
+static int cmp_version(const char *v1, const char *v2)
+{
+	int ret;
+	int oct_v1[3], oct_v2[3];
+
+	memset(oct_v1, -1, sizeof(oct_v1));
+	memset(oct_v2, -1, sizeof(oct_v2));
+
+	ret = sscanf(v1, "%d.%d.%d", &oct_v1[0], &oct_v1[1], &oct_v1[2]);
+	if (ret < 1)
+		return -1;
+
+	ret = sscanf(v2, "%d.%d.%d", &oct_v2[0], &oct_v2[1], &oct_v2[2]);
+	if (ret < 1)
+		return -1;
+
+	/* Major version is greater. */
+	if (oct_v1[0] > oct_v2[0])
+		return 1;
+
+	if (oct_v1[0] < oct_v2[0])
+		return -1;
+
+	/* Minor number is greater.*/
+	if (oct_v1[1] > oct_v2[1])
+		return 1;
+
+	if (oct_v1[1] < oct_v2[1])
+		return -1;
+
+	/* Patch number is greater. */
+	if (oct_v1[2] > oct_v2[2])
+		return 1;
+
+	/* Patch numbers are equal. */
+	if (oct_v1[2] == oct_v2[2])
+		return 0;
+
+	return -1;
+}
+
 static void exec_criu(struct criu_opts *opts)
 {
 	char **argv, log[PATH_MAX];
@@ -135,7 +176,7 @@ static void exec_criu(struct criu_opts *opts)
 	FILE *mnts;
 	struct mntent mntent;
 
-	char buf[4096], tty_info[32];
+	char buf[4096], ttys[32];
 	size_t pos;
 
 	/* If we are currently in a cgroup /foo/bar, and the container is in a
@@ -192,12 +233,12 @@ static void exec_criu(struct criu_opts *opts)
 		 */
 		static_args += 6;
 
-		tty_info[0] = 0;
-		if (load_tty_major_minor(opts->user->directory, tty_info, sizeof(tty_info)))
+		ttys[0] = 0;
+		if (load_tty_major_minor(opts->user->directory, ttys, sizeof(ttys)))
 			return;
 
 		/* --inherit-fd fd[%d]:tty[%s] */
-		if (tty_info[0])
+		if (ttys[0])
 			static_args += 2;
 	} else {
 		return;
@@ -263,7 +304,7 @@ static void exec_criu(struct criu_opts *opts)
 
 	for (i = 0; i < cgroup_num_hierarchies(); i++) {
 		char **controllers = NULL, *fullname;
-		char *path;
+		char *path, *tmp;
 
 		if (!cgroup_get_hierarchies(i, &controllers)) {
 			ERROR("failed to get hierarchy %d", i);
@@ -296,11 +337,15 @@ static void exec_criu(struct criu_opts *opts)
 			}
 		}
 
-		if (!lxc_deslashify(&path)) {
-			ERROR("failed to deslashify %s", path);
+		tmp = lxc_deslashify(path);
+		if (!tmp) {
+			ERROR("Failed to remove extraneous slashes from \"%s\"",
+			      path);
 			free(path);
 			goto err;
 		}
+		free(path);
+		path = tmp;
 
 		fullname = lxc_string_join(",", (const char **) controllers, false);
 		if (!fullname) {
@@ -329,13 +374,23 @@ static void exec_criu(struct criu_opts *opts)
 		DECLARE_ARG(opts->user->action_script);
 	}
 
-	mnts = write_mount_file(&opts->c->lxc_conf->mount_list);
+	mnts = make_anonymous_mount_file(&opts->c->lxc_conf->mount_list);
 	if (!mnts)
 		goto err;
 
 	while (getmntent_r(mnts, &mntent, buf, sizeof(buf))) {
-		char *fmt, *key, *val;
+		char *fmt, *key, *val, *mntdata;
 		char arg[2 * PATH_MAX + 2];
+		unsigned long flags;
+
+		if (parse_mntopts(mntent.mnt_opts, &flags, &mntdata) < 0)
+			goto err;
+
+		free(mntdata);
+
+		/* only add --ext-mount-map for actual bind mounts */
+		if (!(flags & MS_BIND))
+			continue;
 
 		if (strcmp(opts->action, "dump") == 0) {
 			fmt = "/%s:%s";
@@ -438,13 +493,13 @@ static void exec_criu(struct criu_opts *opts)
 		DECLARE_ARG("--restore-detached");
 		DECLARE_ARG("--restore-sibling");
 
-		if (tty_info[0]) {
+		if (ttys[0]) {
 			if (opts->console_fd < 0) {
-				ERROR("lxc.console configured on source host but not target");
+				ERROR("lxc.console.path configured on source host but not target");
 				goto err;
 			}
 
-			ret = snprintf(buf, sizeof(buf), "fd[%d]:%s", opts->console_fd, tty_info);
+			ret = snprintf(buf, sizeof(buf), "fd[%d]:%s", opts->console_fd, ttys);
 			if (ret < 0 || ret >= sizeof(buf))
 				goto err;
 
@@ -482,9 +537,21 @@ static void exec_criu(struct criu_opts *opts)
 
 		lxc_list_for_each(it, &opts->c->lxc_conf->network) {
 			char eth[128], *veth;
+			char *fmt;
 			struct lxc_netdev *n = it->elem;
+			bool external_not_veth;
 
-			if (n->name) {
+			if (cmp_version(opts->criu_version, CRIU_EXTERNAL_NOT_VETH) >= 0) {
+				/* Since criu version 2.8 the usage of --veth-pair
+				 * has been deprecated:
+				 * git tag --contains f2037e6d3445fc400
+				 * v2.8 */
+				external_not_veth = true;
+			} else {
+				external_not_veth = false;
+			}
+
+			if (n->name[0] != '\0') {
 				if (strlen(n->name) >= sizeof(eth))
 					goto err;
 				strncpy(eth, n->name, sizeof(eth));
@@ -497,16 +564,29 @@ static void exec_criu(struct criu_opts *opts)
 			switch (n->type) {
 			case LXC_NET_VETH:
 				veth = n->priv.veth_attr.pair;
+				if (veth[0] == '\0')
+					veth = n->priv.veth_attr.veth1;
 
-				if (n->link)
-					ret = snprintf(buf, sizeof(buf), "veth[%s]:%s@%s", eth, veth, n->link);
-				else
-					ret = snprintf(buf, sizeof(buf), "veth[%s]:%s", eth, veth);
+				if (n->link[0] != '\0') {
+					if (external_not_veth)
+						fmt = "veth[%s]:%s@%s";
+					else
+						fmt = "%s=%s@%s";
+
+					ret = snprintf(buf, sizeof(buf), fmt, eth, veth, n->link);
+				} else {
+					if (external_not_veth)
+						fmt = "veth[%s]:%s";
+					else
+						fmt = "%s=%s";
+
+					ret = snprintf(buf, sizeof(buf), fmt, eth, veth);
+				}
 				if (ret < 0 || ret >= sizeof(buf))
 					goto err;
 				break;
 			case LXC_NET_MACVLAN:
-				if (!n->link) {
+				if (n->link[0] == '\0') {
 					ERROR("no host interface for macvlan %s", n->name);
 					goto err;
 				}
@@ -524,7 +604,10 @@ static void exec_criu(struct criu_opts *opts)
 				goto err;
 			}
 
-			DECLARE_ARG("--external");
+			if (external_not_veth)
+				DECLARE_ARG("--external");
+			else
+				DECLARE_ARG("--veth-pair");
 			DECLARE_ARG(buf);
 			netnr++;
 		}
@@ -570,6 +653,104 @@ err:
 }
 
 /*
+ * Function to check if the checks activated in 'features_to_check' are
+ * available with the current architecture/kernel/criu combination.
+ *
+ * Parameter features_to_check is a bit mask of all features that should be
+ * checked (see feature check defines in lxc/lxccontainer.h).
+ *
+ * If the return value is true, all requested features are supported. If
+ * the return value is false the features_to_check parameter is updated
+ * to reflect which features are available. '0' means no feature but
+ * also that something went totally wrong.
+ *
+ * Some of the code flow of criu_version_ok() is duplicated and maybe it
+ * is a good candidate for refactoring.
+ */
+bool __criu_check_feature(uint64_t *features_to_check)
+{
+	pid_t pid;
+	uint64_t current_bit = 0;
+	int ret;
+	int features = *features_to_check;
+	/* Feature checking is currently always like
+	 * criu check --feature <feature-name>
+	 */
+	char *args[] = { "criu", "check", "--feature", NULL, NULL };
+
+	if ((features & ~FEATURE_MEM_TRACK & ~FEATURE_LAZY_PAGES) != 0) {
+		/* There are feature bits activated we do not understand.
+		 * Refusing to answer at all */
+		*features_to_check = 0;
+		return false;
+	}
+
+	while (current_bit < sizeof(uint64_t) * 8) {
+		/* only test requested features */
+		if (!(features & (1ULL << current_bit))) {
+			/* skip this */
+			current_bit++;
+			continue;
+		}
+
+		pid = fork();
+		if (pid < 0) {
+			SYSERROR("fork() failed");
+			*features_to_check = 0;
+			return false;
+		}
+
+		if (pid == 0) {
+			if ((1ULL << current_bit) == FEATURE_MEM_TRACK)
+				/* This is needed for pre-dump support, which
+				 * enables pre-copy migration. */
+				args[3] = "mem_dirty_track";
+			else if ((1ULL << current_bit) == FEATURE_LAZY_PAGES)
+				/* CRIU has two checks for userfaultfd support.
+				 *
+				 * The simpler check is only for 'uffd'. If the
+				 * kernel supports userfaultfd without noncoop
+				 * then only process can be lazily restored
+				 * which do not fork. With 'uffd-noncoop'
+				 * it is also possible to lazily restore processes
+				 * which do fork. For a container runtime like
+				 * LXC checking only for 'uffd' makes not much sense. */
+				args[3] = "uffd-noncoop";
+			else
+				_exit(EXIT_FAILURE);
+
+			null_stdfds();
+
+			execvp("criu", args);
+			SYSERROR("Failed to exec \"criu\"");
+			_exit(EXIT_FAILURE);
+		}
+
+		ret = wait_for_pid(pid);
+
+		if (ret == -1) {
+			/* It is not known why CRIU failed. Either
+			 * CRIU is not available, the feature check
+			 * does not exist or the feature is not
+			 * supported. */
+			INFO("feature not supported");
+			/* Clear not supported feature bit */
+			features &= ~(1ULL << current_bit);
+		}
+
+		current_bit++;
+		/* no more checks requested; exit check loop */
+		if (!(features & ~((1ULL << current_bit)-1)))
+			break;
+	}
+	if (features != *features_to_check) {
+		*features_to_check = features;
+		return false;
+	}
+	return true;
+}
+
+/*
  * Check to see if the criu version is recent enough for all the features we
  * use. This version allows either CRIU_VERSION or (CRIU_GITID_VERSION and
  * CRIU_GITID_PATCHLEVEL) to work, enabling users building from git to c/r
@@ -604,14 +785,14 @@ static bool criu_version_ok(char **version)
 
 		close(STDERR_FILENO);
 		if (dup2(pipes[1], STDOUT_FILENO) < 0)
-			exit(1);
+			_exit(EXIT_FAILURE);
 
 		path = on_path("criu", NULL);
 		if (!path)
-			exit(1);
+			_exit(EXIT_FAILURE);
 
 		execv(path, args);
-		exit(1);
+		_exit(EXIT_FAILURE);
 	} else {
 		FILE *f;
 		char *tmp;
@@ -725,11 +906,13 @@ static bool restore_net_info(struct lxc_container *c)
 
 		snprintf(template, sizeof(template), "vethXXXXXX");
 
-		if (!netdev->priv.veth_attr.pair)
-			netdev->priv.veth_attr.pair = lxc_mkifname(template);
+		if (netdev->priv.veth_attr.pair[0] == '\0' &&
+		    netdev->priv.veth_attr.veth1[0] == '\0') {
+			if (!lxc_mkifname(template))
+				goto out_unlock;
 
-		if (!netdev->priv.veth_attr.pair)
-			goto out_unlock;
+			strcpy(netdev->priv.veth_attr.veth1, template);
+		}
 	}
 
 	has_error = false;
@@ -739,13 +922,15 @@ out_unlock:
 	return !has_error;
 }
 
-// do_restore never returns, the calling process is used as the
-// monitor process. do_restore calls exit() if it fails.
+/* do_restore never returns, the calling process is used as the monitor process.
+ * do_restore calls _exit() if it fails.
+ */
 static void do_restore(struct lxc_container *c, int status_pipe, struct migrate_opts *opts, char *criu_version)
 {
+	int fd, ret;
 	pid_t pid;
 	struct lxc_handler *handler;
-	int status, fd;
+	int status = 0;
 	int pipes[2] = {-1, -1};
 
 	/* Try to detach from the current controlling tty if it exists.
@@ -761,8 +946,11 @@ static void do_restore(struct lxc_container *c, int status_pipe, struct migrate_
 		close(fd);
 	}
 
-	handler = lxc_init(c->name, c->lxc_conf, c->config_path);
+	handler = lxc_init_handler(c->name, c->lxc_conf, c->config_path, false);
 	if (!handler)
+		goto out;
+
+	if (lxc_init(c->name, handler) < 0)
 		goto out;
 
 	if (!cgroup_init(handler)) {
@@ -780,7 +968,11 @@ static void do_restore(struct lxc_container *c, int status_pipe, struct migrate_
 		goto out_fini_handler;
 	}
 
-	resolve_clone_flags(handler);
+	ret = resolve_clone_flags(handler);
+	if (ret < 0) {
+		ERROR("%s - Unsupported clone flag specified", strerror(errno));
+		goto out_fini_handler;
+	}
 
 	if (pipe(pipes) < 0) {
 		SYSERROR("pipe() failed");
@@ -937,13 +1129,18 @@ static void do_restore(struct lxc_container *c, int status_pipe, struct migrate_
 		 * assign the return here to silence potential.
 		 */
 		ret = snprintf(title, sizeof(title), "[lxc monitor] %s %s", c->config_path, c->name);
+		if (ret < 0 || (size_t)ret >= sizeof(title))
+			INFO("Setting truncated process name");
+
 		ret = setproctitle(title);
+		if (ret < 0)
+			INFO("Failed to set process name");
 
 		ret = lxc_poll(c->name, handler);
 		if (ret)
 			lxc_abort(c->name, handler);
 		lxc_fini(c->name, handler);
-		exit(ret);
+		_exit(ret);
 	}
 
 out_fini_handler:
@@ -962,13 +1159,13 @@ out:
 		 */
 		if (!status)
 			status = 1;
-		if (write(status_pipe, &status, sizeof(status)) != sizeof(status)) {
+
+		if (write(status_pipe, &status, sizeof(status)) != sizeof(status))
 			SYSERROR("writing status failed");
-		}
 		close(status_pipe);
 	}
 
-	exit(1);
+	_exit(EXIT_FAILURE);
 }
 
 static int save_tty_major_minor(char *directory, struct lxc_container *c, char *tty_id, int len)
@@ -1025,14 +1222,16 @@ static int save_tty_major_minor(char *directory, struct lxc_container *c, char *
 /* do one of either predump or a regular dump */
 static bool do_dump(struct lxc_container *c, char *mode, struct migrate_opts *opts)
 {
+	int ret;
 	pid_t pid;
-	char *criu_version = NULL;
 	int criuout[2];
+	char *criu_version = NULL;
 
 	if (!criu_ok(c, &criu_version))
 		return false;
 
-	if (pipe(criuout) < 0) {
+	ret = pipe(criuout);
+	if (ret < 0) {
 		SYSERROR("pipe() failed");
 		return false;
 	}
@@ -1052,10 +1251,12 @@ static bool do_dump(struct lxc_container *c, char *mode, struct migrate_opts *op
 
 		close(criuout[0]);
 
+		lxc_zero_handler(&h);
+
 		h.name = c->name;
 		if (!cgroup_init(&h)) {
 			ERROR("failed to cgroup_init()");
-			exit(1);
+			_exit(EXIT_FAILURE);
 		}
 
 		os.pipefd = criuout[1];
@@ -1065,12 +1266,16 @@ static bool do_dump(struct lxc_container *c, char *mode, struct migrate_opts *op
 		os.console_name = c->lxc_conf->console.path;
 		os.criu_version = criu_version;
 
-		if (save_tty_major_minor(opts->directory, c, os.tty_id, sizeof(os.tty_id)) < 0)
-			exit(1);
+		ret = save_tty_major_minor(opts->directory, c, os.tty_id, sizeof(os.tty_id));
+		if (ret < 0) {
+			free(criu_version);
+			_exit(EXIT_FAILURE);
+		}
 
 		/* exec_criu() returning is an error */
 		exec_criu(&os);
-		exit(1);
+		free(criu_version);
+		_exit(EXIT_FAILURE);
 	} else {
 		int status;
 		ssize_t n;
@@ -1117,6 +1322,7 @@ fail:
 	close(criuout[0]);
 	close(criuout[1]);
 	rmdir(opts->directory);
+	free(criu_version);
 	return false;
 }
 
@@ -1171,7 +1377,7 @@ bool __criu_restore(struct lxc_container *c, struct migrate_opts *opts)
 
 	if (pid == 0) {
 		close(pipefd[0]);
-		// this never returns
+		/* this never returns */
 		do_restore(c, pipefd[1], opts, criu_version);
 	}
 
@@ -1184,9 +1390,10 @@ bool __criu_restore(struct lxc_container *c, struct migrate_opts *opts)
 		goto err_wait;
 	}
 
-	// If the criu process was killed or exited nonzero, wait() for the
-	// handler, since the restore process died. Otherwise, we don't need to
-	// wait, since the child becomes the monitor process.
+	/* If the criu process was killed or exited nonzero, wait() for the
+	 * handler, since the restore process died. Otherwise, we don't need to
+	 * wait, since the child becomes the monitor process.
+	 */
 	if (!WIFEXITED(status) || WEXITSTATUS(status))
 		goto err_wait;
 	return true;

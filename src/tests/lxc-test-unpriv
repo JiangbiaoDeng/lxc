@@ -27,6 +27,41 @@ if [ $(id -u) -ne 0 ]; then
 	echo "ERROR: Must run as root."
 	exit 1
 fi
+
+# Test if we're using an overlayfs module that handles symlinks correctly. If
+# not, we skip these tests since overlay clones will not work correctly.
+if modprobe -q overlayfs; then
+        TMPDIR=$(mktemp -d)
+
+        MOUNTDIR="${TMPDIR}/ovl_symlink_test"
+
+        mkdir ${MOUNTDIR}
+
+        mount -t tmpfs none ${MOUNTDIR}
+
+        mkdir ${MOUNTDIR}/{lowerdir,upperdir,workdir,overlayfs}
+        mount -t overlayfs -o lowerdir="${MOUNTDIR}/lowerdir",upperdir="${MOUNTDIR}/upperdir",workdir="${MOUNTDIR}/workdir" none "${MOUNTDIR}/overlayfs"
+
+        CORRECT_LINK_TARGET="${MOUNTDIR}/overlayfs/dummy_file"
+        exec 9> "${CORRECT_LINK_TARGET}"
+
+        DETECTED_LINK_TARGET=$(readlink -q /proc/$$/fd/9)
+
+        # cleanup
+        exec 9>&-
+
+        umount "${MOUNTDIR}/overlayfs"
+        umount ${MOUNTDIR}
+
+        rmdir ${MOUNTDIR}
+
+        # This overlay module does not correctly handle symlinks, so skip the
+        # tests.
+        if [ "${DETECTED_LINK_TARGET}" != "${CORRECT_LINK_TARGET}" ]; then
+                exit 0
+        fi
+fi
+
 which newuidmap >/dev/null 2>&1 || { echo "'newuidmap' command is missing" >&2; exit 1; }
 
 DONE=0
@@ -36,7 +71,7 @@ cleanup() {
 
 	run_cmd lxc-stop -n c2 -k || true
 	run_cmd lxc-stop -n c1 -k || true
-	pkill -u $(id -u $TUSER) -9
+	pkill -u $(id -u $TUSER) -9 || true
 
 	sed -i '/lxcunpriv/d' /run/lxc/nics /etc/lxc/lxc-usernet
 	sed -i '/^lxcunpriv:/d' /etc/subuid /etc/subgid
@@ -70,7 +105,7 @@ fi
 trap cleanup EXIT SIGHUP SIGINT SIGTERM
 set -eu
 
-deluser $TUSER && rm -Rf $HDIR || true
+id $TUSER &> /dev/null && deluser -q --remove-home $TUSER
 useradd $TUSER
 
 mkdir -p $HDIR
@@ -81,10 +116,10 @@ usermod -v 910000-919999 -w 910000-919999 $TUSER
 
 mkdir -p $HDIR/.config/lxc/
 cat > $HDIR/.config/lxc/default.conf << EOF
-lxc.network.type = veth
-lxc.network.link = lxcbr0
-lxc.id_map = u 0 910000 9999
-lxc.id_map = g 0 910000 9999
+lxc.net.0.type = veth
+lxc.net.0.link = lxcbr0
+lxc.idmap = u 0 910000 9999
+lxc.idmap = g 0 910000 9999
 EOF
 chown -R $TUSER: $HDIR
 
@@ -113,6 +148,7 @@ elif [ -e /sys/fs/cgroup/cgmanager/sock ]; then
 	done
 else
 	for d in /sys/fs/cgroup/*; do
+		[ "$d" = "/sys/fs/cgroup/unified" ] && continue
 		[ -f $d/cgroup.clone_children ] && echo 1 > $d/cgroup.clone_children
 		[ ! -d $d/lxctest ] && mkdir $d/lxctest
 		chown -R $TUSER: $d/lxctest
@@ -150,7 +186,7 @@ for count in `seq 1 2`; do
     run_cmd lxc-info -n c1
     run_cmd lxc-attach -n c1 -- /bin/true
 
-    run_cmd lxc-stop -n c1
+    run_cmd lxc-stop -n c1 -k
 done
 
 run_cmd lxc-copy -s -n c1 -N c2
@@ -158,7 +194,7 @@ run_cmd lxc-start -n c2 -d
 p1=$(run_cmd lxc-info -n c2 -p -H)
 [ "$p1" != "-1" ] || { echo "Failed to start container c2"; false; }
 
-run_cmd lxc-stop -n c2
+run_cmd lxc-stop -n c2 -k
 
 if which cgm >/dev/null 2>&1; then
     echo "Testing containers under different cgroups per subsystem"

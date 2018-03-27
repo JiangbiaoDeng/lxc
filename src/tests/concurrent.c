@@ -16,13 +16,13 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#define _GNU_SOURCE
 #include <limits.h>
 #include <stdio.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
-#define _GNU_SOURCE
 #include <getopt.h>
 
 #include <lxc/lxccontainer.h>
@@ -84,10 +84,8 @@ static void do_function(void *arguments)
         return;
     }
 
-    if (debug) {
-        c->set_config_item(c, "lxc.loglevel", "DEBUG");
-        c->set_config_item(c, "lxc.logfile", name);
-    }
+    if (debug)
+        c->set_config_item(c, "lxc.log.level", "DEBUG");
 
     if (strcmp(args->mode, "create") == 0) {
         if (!c->is_defined(c)) {
@@ -188,7 +186,8 @@ int main(int argc, char *argv[]) {
                 }
                 modes[i] = tok;
             }
-            modes[i] = NULL;
+	    if (modes)
+		    modes[i] = NULL;
             break;
         }
         default: /* '?' */

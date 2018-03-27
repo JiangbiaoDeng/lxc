@@ -30,6 +30,7 @@ man_MANS = \
 	lxc-top.1 \
 	lxc-unfreeze.1 \
 	lxc-unshare.1 \
+	lxc-update-config.1 \
 	lxc-user-nic.1 \
 	lxc-usernsexec.1 \
 	lxc-wait.1 \
@@ -40,13 +41,6 @@ man_MANS = \
 	lxc-usernet.5 \
 	\
 	lxc.7
-
-if ENABLE_DEPRECATED
-    man_MANS += lxc-clone.1
-if ENABLE_PYTHON
-    man_MANS += lxc-start-ephemeral.1
-endif
-endif
 
 %.1 : %.sgml
 	$(db2xman) --encoding=UTF-8 $<

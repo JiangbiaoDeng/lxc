@@ -19,7 +19,6 @@
  */
 
 #define _GNU_SOURCE
-#include "lxclock.h"
 #include <malloc.h>
 #include <stdio.h>
 #include <errno.h>
@@ -30,6 +29,7 @@
 
 #include <lxc/lxccontainer.h>
 
+#include "lxclock.h"
 #include "utils.h"
 #include "log.h"
 
@@ -38,11 +38,6 @@
 #endif
 
 #define MAX_STACKDEPTH 25
-
-#define OFLAG (O_CREAT | O_RDWR)
-#define SEMMODE 0660
-#define SEMVALUE 1
-#define SEMVALUE_LOCKED 0
 
 lxc_log_define(lxc_lock, lxc);
 
@@ -59,13 +54,13 @@ static inline void dump_stacktrace(void)
 	size = backtrace(array, MAX_STACKDEPTH);
 	strings = backtrace_symbols(array, size);
 
-	// Using fprintf here as our logging module is not thread safe
-	fprintf(stderr, "\tObtained %zd stack frames.\n", size);
+	/* Using fprintf here as our logging module is not thread safe. */
+	fprintf(stderr, "\tObtained %zu stack frames.\n", size);
 
 	for (i = 0; i < size; i++)
 		fprintf(stderr, "\t\t%s\n", strings[i]);
 
-	free (strings);
+	free(strings);
 }
 #else
 static pthread_mutex_t thread_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -77,10 +72,11 @@ static void lock_mutex(pthread_mutex_t *l)
 {
 	int ret;
 
-	if ((ret = pthread_mutex_lock(l)) != 0) {
-		fprintf(stderr, "pthread_mutex_lock returned:%d %s\n", ret, strerror(ret));
+	ret = pthread_mutex_lock(l);
+	if (ret != 0) {
+		fprintf(stderr, "%s - Failed acquire mutex", strerror(ret));
 		dump_stacktrace();
-		exit(1);
+		_exit(EXIT_FAILURE);
 	}
 }
 
@@ -88,10 +84,11 @@ static void unlock_mutex(pthread_mutex_t *l)
 {
 	int ret;
 
-	if ((ret = pthread_mutex_unlock(l)) != 0) {
-		fprintf(stderr, "pthread_mutex_unlock returned:%d %s\n", ret, strerror(ret));
+	ret = pthread_mutex_unlock(l);
+	if (ret != 0) {
+		fprintf(stderr, "%s - Failed to release mutex", strerror(ret));
 		dump_stacktrace();
-		exit(1);
+		_exit(EXIT_FAILURE);
 	}
 }
 
@@ -216,12 +213,10 @@ int lxclock(struct lxc_lock *l, int timeout)
 		ret = -2;
 		if (timeout) {
 			ERROR("Error: timeout not supported with flock");
-			ret = -2;
 			goto out;
 		}
 		if (!l->u.f.fname) {
 			ERROR("Error: filename not set for flock");
-			ret = -2;
 			goto out;
 		}
 		if (l->u.f.fd == -1) {
@@ -229,6 +224,7 @@ int lxclock(struct lxc_lock *l, int timeout)
 					S_IWUSR | S_IRUSR);
 			if (l->u.f.fd == -1) {
 				ERROR("Error opening %s", l->u.f.fname);
+				saved_errno = errno;
 				goto out;
 			}
 		}
@@ -321,23 +317,6 @@ void process_unlock(void)
 {
 	unlock_mutex(&thread_mutex);
 }
-
-/* One thread can do fork() while another one is holding a mutex.
- * There is only one thread in child just after the fork(), so no one will ever release that mutex.
- * We setup a "child" fork handler to unlock the mutex just after the fork().
- * For several mutex types, unlocking an unlocked mutex can lead to undefined behavior.
- * One way to deal with it is to setup "prepare" fork handler
- * to lock the mutex before fork() and both "parent" and "child" fork handlers
- * to unlock the mutex.
- * This forbids doing fork() while explicitly holding the lock.
- */
-#ifdef HAVE_PTHREAD_ATFORK
-__attribute__((constructor))
-static void process_lock_setup_atfork(void)
-{
-	pthread_atfork(process_lock, process_unlock, process_unlock);
-}
-#endif
 
 int container_mem_lock(struct lxc_container *c)
 {

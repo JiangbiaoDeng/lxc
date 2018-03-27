@@ -21,38 +21,23 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "config.h"
-
-#include <assert.h>
+#define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/ioctl.h>
-#include <sys/types.h>
-#include <sys/wait.h>
+#include <string.h>
 #include <termios.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #include <lxc/lxccontainer.h>
 
-#include "attach.h"
 #include "arguments.h"
-#include "caps.h"
-#include "confile.h"
-#include "console.h"
-#include "log.h"
-#include "list.h"
-#include "mainloop.h"
-#include "utils.h"
-
-#if HAVE_PTY_H
-#include <pty.h>
-#else
-#include <../include/openpty.h>
-#endif
-
-lxc_log_define(lxc_attach_ui, lxc);
+#include "tool_utils.h"
 
 static const struct option my_longopts[] = {
 	{"elevated-privileges", optional_argument, 0, 'e'},
@@ -83,7 +68,8 @@ static int add_to_simple_array(char ***array, ssize_t *capacity, char *value)
 {
 	ssize_t count = 0;
 
-	assert(array);
+	if (!array)
+		return -1;
 
 	if (*array)
 		for (; (*array)[count]; count++);
@@ -99,7 +85,8 @@ static int add_to_simple_array(char ***array, ssize_t *capacity, char *value)
 		*capacity = new_capacity;
 	}
 
-	assert(*array);
+	if (!(*array))
+		return -1;
 
 	(*array)[count] = value;
 	return 0;
@@ -107,6 +94,8 @@ static int add_to_simple_array(char ***array, ssize_t *capacity, char *value)
 
 static int my_parser(struct lxc_arguments* args, int c, char* arg)
 {
+	char **it;
+	char *del;
 	int ret;
 
 	switch (c) {
@@ -125,6 +114,30 @@ static int my_parser(struct lxc_arguments* args, int c, char* arg)
 		break;
 	case 's':
 		namespace_flags = 0;
+
+		/* The identifiers for namespaces used with lxc-attach as given
+		 * on the manpage do not align with the standard identifiers.
+		 * This affects network, mount, and uts namespaces. The standard
+		 * identifiers are: "mnt", "uts", and "net" whereas lxc-attach
+		 * uses "MOUNT", "UTSNAME", and "NETWORK". So let's use some
+		 * cheap memmove()s to replace them by their standard
+		 * identifiers. Let's illustrate this with an example:
+		 * Assume the string:
+		 *
+		 *	"IPC|MOUNT|PID"
+		 *
+		 * then we memmove()
+		 *
+		 *	dest: del + 1 == OUNT|PID
+		 *	src:  del + 3 == NT|PID
+		 */
+		while ((del = strstr(arg, "MOUNT")))
+			memmove(del + 1, del + 3, strlen(del) - 2);
+
+		for (it = (char *[]){"NETWORK", "UTSNAME", NULL}; it && *it; it++)
+			while ((del = strstr(arg, *it)))
+				memmove(del + 3, del + 7, strlen(del) - 6);
+
 		ret = lxc_fill_namespace_flags(arg, &namespace_flags);
 		if (ret)
 			return -1;
@@ -215,138 +228,36 @@ Options :\n\
 	.checker  = NULL,
 };
 
-struct wrapargs {
-	lxc_attach_options_t *options;
-	lxc_attach_command_t *command;
-	struct lxc_console *console;
-	int ptyfd;
-};
-
-/* Minimalistic login_tty() implementation. */
-static int login_pty(int fd)
-{
-	setsid();
-	if (ioctl(fd, TIOCSCTTY, NULL) < 0)
-		return -1;
-	if (lxc_console_set_stdfds(fd) < 0)
-		return -1;
-	if (fd > STDERR_FILENO)
-		close(fd);
-	return 0;
-}
-
-static int get_pty_on_host_callback(void *p)
-{
-	struct wrapargs *wrap = p;
-
-	close(wrap->console->master);
-	if (login_pty(wrap->console->slave) < 0)
-		return -1;
-
-	if (wrap->command->program)
-		lxc_attach_run_command(wrap->command);
-	else
-		lxc_attach_run_shell(NULL);
-	return -1;
-}
-
-static int get_pty_on_host(struct lxc_container *c, struct wrapargs *wrap, int *pid)
-{
-	int ret = -1;
-	struct wrapargs *args = wrap;
-	struct lxc_epoll_descr descr;
-	struct lxc_conf *conf;
-	struct lxc_tty_state *ts;
-
-	INFO("Trying to allocate a pty on the host");
-
-	if (!isatty(args->ptyfd)) {
-		ERROR("Standard file descriptor does not refer to a pty\n.");
-		return -1;
-	}
-
-	conf = c->lxc_conf;
-	free(conf->console.log_path);
-	if (my_args.console_log)
-		conf->console.log_path = strdup(my_args.console_log);
-	else
-		conf->console.log_path = NULL;
-
-	/* In the case of lxc-attach our peer pty will always be the current
-	 * controlling terminal. We clear whatever was set by the user for
-	 * lxc.console.path here and set it to "/dev/tty". Doing this will (a)
-	 * prevent segfaults when the container has been setup with
-	 * lxc.console = none and (b) provide an easy way to ensure that we
-	 * always do the correct thing. strdup() must be used since console.path
-	 * is free()ed when we call lxc_container_put(). */
-	free(conf->console.path);
-	conf->console.path = strdup("/dev/tty");
-	if (!conf->console.path)
-		return -1;
-
-	/* Create pty on the host. */
-	if (lxc_console_create(conf) < 0)
-		return -1;
-	ts = conf->console.tty_state;
-	conf->console.descr = &descr;
-
-	/* Shift ttys to container. */
-	if (ttys_shift_ids(conf) < 0) {
-		ERROR("Failed to shift tty into container");
-		goto err1;
-	}
-
-	/* Send wrapper function on its way. */
-	wrap->console = &conf->console;
-	if (c->attach(c, get_pty_on_host_callback, wrap, wrap->options, pid) < 0)
-		goto err1;
-	close(conf->console.slave); /* Close slave side. */
-
-	ret = lxc_mainloop_open(&descr);
-	if (ret) {
-		ERROR("failed to create mainloop");
-		goto err2;
-	}
-
-	if (lxc_console_mainloop_add(&descr, conf) < 0) {
-		ERROR("Failed to add handlers to lxc mainloop.");
-		goto err3;
-	}
-
-	ret = lxc_mainloop(&descr, -1);
-	if (ret) {
-		ERROR("mainloop returned an error");
-		goto err3;
-	}
-	ret = 0;
-
-err3:
-	lxc_mainloop_close(&descr);
-err2:
-	if (ts && ts->sigfd != -1)
-		lxc_console_sigwinch_fini(ts);
-err1:
-	lxc_console_delete(&conf->console);
-
-	return ret;
-}
-
-static int stdfd_is_pty(void)
+static bool stdfd_is_pty(void)
 {
 	if (isatty(STDIN_FILENO))
-		return STDIN_FILENO;
+		return true;
 	if (isatty(STDOUT_FILENO))
-		return STDOUT_FILENO;
+		return true;
 	if (isatty(STDERR_FILENO))
-		return STDERR_FILENO;
+		return true;
 
-	return -1;
+	return false;
+}
+
+int lxc_attach_create_log_file(const char *log_file)
+{
+	int fd;
+
+	fd = open(log_file, O_CLOEXEC | O_RDWR | O_CREAT | O_APPEND, 0600);
+	if (fd < 0) {
+		fprintf(stderr, "Failed to open log file \"%s\"\n", log_file);
+		return -1;
+	}
+
+	return fd;
 }
 
 int main(int argc, char *argv[])
 {
 	int ret = -1, r;
 	int wexit = 0;
+	struct lxc_log log;
 	pid_t pid;
 	lxc_attach_options_t attach_options = LXC_ATTACH_OPTIONS_DEFAULT;
 	lxc_attach_command_t command = (lxc_attach_command_t){.program = NULL};
@@ -362,14 +273,18 @@ int main(int argc, char *argv[])
 	if (!my_args.log_file)
 		my_args.log_file = "none";
 
-	r = lxc_log_init(my_args.name, my_args.log_file, my_args.log_priority,
-			   my_args.progname, my_args.quiet, my_args.lxcpath[0]);
+	log.name = my_args.name;
+	log.file = my_args.log_file;
+	log.level = my_args.log_priority;
+	log.prefix = my_args.progname;
+	log.quiet = my_args.quiet;
+	log.lxcpath = my_args.lxcpath[0];
+	r = lxc_log_init(&log);
 	if (r)
 		exit(EXIT_FAILURE);
-	lxc_log_options_no_override();
 
 	if (geteuid()) {
-		if (access(my_args.lxcpath[0], O_RDWR) < 0) {
+		if (access(my_args.lxcpath[0], O_RDONLY) < 0) {
 			if (!my_args.quiet)
 				fprintf(stderr, "You lack access to %s\n", my_args.lxcpath[0]);
 			exit(EXIT_FAILURE);
@@ -383,13 +298,13 @@ int main(int argc, char *argv[])
 	if (my_args.rcfile) {
 		c->clear_config(c);
 		if (!c->load_config(c, my_args.rcfile)) {
-			ERROR("Failed to load rcfile");
+			fprintf(stderr, "Failed to load rcfile\n");
 			lxc_container_put(c);
 			exit(EXIT_FAILURE);
 		}
 		c->configfile = strdup(my_args.rcfile);
 		if (!c->configfile) {
-			ERROR("Out of memory setting new config filename");
+			fprintf(stderr, "Out of memory setting new config filename\n");
 			lxc_container_put(c);
 			exit(EXIT_FAILURE);
 		}
@@ -401,16 +316,12 @@ int main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	if (!c->is_defined(c)) {
-		fprintf(stderr, "Error: container %s is not defined\n", c->name);
-		lxc_container_put(c);
-		exit(EXIT_FAILURE);
-	}
-
 	if (remount_sys_proc)
 		attach_options.attach_flags |= LXC_ATTACH_REMOUNT_PROC_SYS;
 	if (elevated_privileges)
 		attach_options.attach_flags &= ~(elevated_privileges);
+	if (stdfd_is_pty())
+		attach_options.attach_flags |= LXC_ATTACH_TERMINAL;
 	attach_options.namespaces = namespace_flags;
 	attach_options.personality = new_personality;
 	attach_options.env_policy = env_policy;
@@ -422,28 +333,16 @@ int main(int argc, char *argv[])
 		command.argv = (char**)my_args.argv;
 	}
 
-	struct wrapargs wrap = (struct wrapargs){
-		.command = &command,
-			.options = &attach_options
-	};
-
-	wrap.ptyfd = stdfd_is_pty();
-	if (wrap.ptyfd >= 0) {
-		if ((!isatty(STDOUT_FILENO) || !isatty(STDERR_FILENO)) && my_args.console_log) {
-			fprintf(stderr, "-L/--pty-log can only be used when stdout and stderr refer to a pty.\n");
+	if (my_args.console_log) {
+		attach_options.log_fd = lxc_attach_create_log_file(my_args.console_log);
+		if (attach_options.log_fd < 0)
 			goto out;
-		}
-		ret = get_pty_on_host(c, &wrap, &pid);
-	} else {
-		if (my_args.console_log) {
-			fprintf(stderr, "-L/--pty-log can only be used when stdout and stderr refer to a pty.\n");
-			goto out;
-		}
-		if (command.program)
-			ret = c->attach(c, lxc_attach_run_command, &command, &attach_options, &pid);
-		else
-			ret = c->attach(c, lxc_attach_run_shell, NULL, &attach_options, &pid);
 	}
+
+	if (command.program)
+		ret = c->attach(c, lxc_attach_run_command, &command, &attach_options, &pid);
+	else
+		ret = c->attach(c, lxc_attach_run_shell, NULL, &attach_options, &pid);
 
 	if (ret < 0)
 		goto out;

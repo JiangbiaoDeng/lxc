@@ -22,17 +22,14 @@
 #include <libgen.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
-#include <lxc/lxccontainer.h>
 #include <sys/types.h>
 
-#include "arguments.h"
-#include "bdev.h"
-#include "log.h"
-#include "lxc.h"
-#include "utils.h"
+#include <lxc/lxccontainer.h>
 
-lxc_log_define(lxc_create_ui, lxc);
+#include "arguments.h"
+#include "tool_utils.h"
 
 static uint64_t get_fssize(char *s)
 {
@@ -48,7 +45,7 @@ static uint64_t get_fssize(char *s)
 	while (isblank(*end))
 		end++;
 	if (*end == '\0')
-		ret *= 1024ULL * 1024ULL; // MB by default
+		ret *= 1024ULL * 1024ULL; /* MB by default */
 	else if (*end == 'b' || *end == 'B')
 		ret *= 1ULL;
 	else if (*end == 'k' || *end == 'K')
@@ -123,7 +120,7 @@ static void create_helpfn(const struct lxc_arguments *args)
 	argv[2] = NULL;
 
 	execv(path, argv);
-	ERROR("Error executing %s -h", path);
+	fprintf(stderr, "Error executing %s -h\n", path);
 	exit(EXIT_FAILURE);
 }
 
@@ -162,7 +159,7 @@ Options :\n\
 \n\
   BDEV options for LVM or Loop (with -B/--bdev lvm/loop) :\n\
       --fstype=TYPE             Create fstype TYPE\n\
-                                (Default: ext3)\n\
+                                (Default: ext4)\n\
       --fssize=SIZE[U]          Create filesystem of\n\
                                 size SIZE * unit U (bBkKmMgGtT)\n\
                                 (Default: 1G, default unit: M)\n",
@@ -204,10 +201,27 @@ static bool validate_bdev_args(struct lxc_arguments *a)
 	return true;
 }
 
+static bool is_valid_storage_type(const char *type)
+{
+	if (strcmp(type, "dir") == 0 ||
+	    strcmp(type, "btrfs") == 0 ||
+	    strcmp(type, "loop") == 0 ||
+	    strcmp(type, "lvm") == 0 ||
+	    strcmp(type, "nbd") == 0 ||
+	    strcmp(type, "overlay") == 0 ||
+	    strcmp(type, "overlayfs") == 0 ||
+	    strcmp(type, "rbd") == 0 ||
+	    strcmp(type, "zfs") == 0)
+		return true;
+
+	return false;
+}
+
 int main(int argc, char *argv[])
 {
 	struct lxc_container *c;
 	struct bdev_specs spec;
+	struct lxc_log log;
 	int flags = 0;
 
 	if (lxc_arguments_parse(&my_args, argc, argv))
@@ -216,10 +230,15 @@ int main(int argc, char *argv[])
 	if (!my_args.log_file)
 		my_args.log_file = "none";
 
-	if (lxc_log_init(my_args.name, my_args.log_file, my_args.log_priority,
-			 my_args.progname, my_args.quiet, my_args.lxcpath[0]))
+	log.name = my_args.name;
+	log.file = my_args.log_file;
+	log.level = my_args.log_priority;
+	log.prefix = my_args.progname;
+	log.quiet = my_args.quiet;
+	log.lxcpath = my_args.lxcpath[0];
+
+	if (lxc_log_init(&log))
 		exit(EXIT_FAILURE);
-	lxc_log_options_no_override();
 
 	if (!my_args.template) {
 		fprintf(stderr, "A template must be specified.\n");
@@ -240,10 +259,10 @@ int main(int argc, char *argv[])
 	if (strcmp(my_args.bdevtype, "none") == 0)
 		my_args.bdevtype = "dir";
 
-	// Final check whether the user gave use a valid bdev type.
+	/* Final check whether the user gave use a valid bdev type. */
 	if (strcmp(my_args.bdevtype, "best") &&
 	    strcmp(my_args.bdevtype, "_unset") &&
-	    !is_valid_bdev_type(my_args.bdevtype)) {
+	    !is_valid_storage_type(my_args.bdevtype)) {
 		fprintf(stderr, "%s is not a valid backing storage type.\n", my_args.bdevtype);
 		exit(EXIT_FAILURE);
 	}
@@ -252,7 +271,7 @@ int main(int argc, char *argv[])
 		if (mkdir_p(my_args.lxcpath[0], 0755)) {
 			exit(EXIT_FAILURE);
 		}
-		if (access(my_args.lxcpath[0], O_RDWR) < 0) {
+		if (access(my_args.lxcpath[0], O_RDONLY) < 0) {
 			fprintf(stderr, "You lack access to %s\n", my_args.lxcpath[0]);
 			exit(EXIT_FAILURE);
 		}
@@ -277,7 +296,7 @@ int main(int argc, char *argv[])
 	if (my_args.configfile)
 		c->load_config(c, my_args.configfile);
 	else
-		c->load_config(c, lxc_global_config_value("lxc.default_config"));
+		c->load_config(c, lxc_get_global_config_item("lxc.default_config"));
 
 	if (my_args.fstype)
 		spec.fstype = my_args.fstype;
@@ -315,12 +334,11 @@ int main(int argc, char *argv[])
 		flags = LXC_CREATE_QUIET;
 
 	if (!c->create(c, my_args.template, my_args.bdevtype, &spec, flags, &argv[optind])) {
-		ERROR("Error creating container %s", c->name);
+		fprintf(stderr, "Error creating container %s\n", c->name);
 		lxc_container_put(c);
 		exit(EXIT_FAILURE);
 	}
 
 	lxc_container_put(c);
-	INFO("container %s created", c->name);
 	exit(EXIT_SUCCESS);
 }

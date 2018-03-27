@@ -21,23 +21,20 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <stdio.h>
-#include <stdbool.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <limits.h>
+#define _GNU_SOURCE
 #include <libgen.h>
+#include <limits.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 #include <sys/types.h>
 
 #include <lxc/lxccontainer.h>
 
-#include "lxc.h"
-#include "log.h"
-#include "utils.h"
-#include "commands.h"
 #include "arguments.h"
-
-lxc_log_define(lxc_info_ui, lxc);
+#include "tool_utils.h"
 
 static bool ips;
 static bool state;
@@ -116,18 +113,18 @@ static void size_humanize(unsigned long long val, char *buf, size_t bufsz)
 {
 	if (val > 1 << 30) {
 		snprintf(buf, bufsz, "%u.%2.2u GiB",
-			    (int)(val >> 30),
-			    (int)(val & ((1 << 30) - 1)) / 10737419);
+			    (unsigned int)(val >> 30),
+			    (unsigned int)(val & ((1 << 30) - 1)) / 10737419);
 	} else if (val > 1 << 20) {
-		int x = val + 5243;  /* for rounding */
+		unsigned int x = val + 5243;  /* for rounding */
 		snprintf(buf, bufsz, "%u.%2.2u MiB",
 			    x >> 20, ((x & ((1 << 20) - 1)) * 100) >> 20);
 	} else if (val > 1 << 10) {
-		int x = val + 5;  /* for rounding */
+		unsigned int x = val + 5;  /* for rounding */
 		snprintf(buf, bufsz, "%u.%2.2u KiB",
 			    x >> 10, ((x & ((1 << 10) - 1)) * 100) >> 10);
 	} else {
-		snprintf(buf, bufsz, "%u bytes", (int)val);
+		snprintf(buf, bufsz, "%u bytes", (unsigned int)val);
 	}
 }
 
@@ -155,15 +152,15 @@ static void print_net_stats(struct lxc_container *c)
 	char buf[256];
 
 	for(netnr = 0; ;netnr++) {
-		sprintf(buf, "lxc.network.%d.type", netnr);
+		sprintf(buf, "lxc.net.%d.type", netnr);
 		type = c->get_running_config_item(c, buf);
 		if (!type)
 			break;
 
 		if (!strcmp(type, "veth")) {
-			sprintf(buf, "lxc.network.%d.veth.pair", netnr);
+			sprintf(buf, "lxc.net.%d.veth.pair", netnr);
 		} else {
-			sprintf(buf, "lxc.network.%d.link", netnr);
+			sprintf(buf, "lxc.net.%d.link", netnr);
 		}
 		free(type);
 		ifname = c->get_running_config_item(c, buf);
@@ -204,10 +201,10 @@ static void print_net_stats(struct lxc_container *c)
 static void print_stats(struct lxc_container *c)
 {
 	int i, ret;
-	char buf[256];
+	char buf[4096];
 
 	ret = c->get_cgroup_item(c, "cpuacct.usage", buf, sizeof(buf));
-	if (ret > 0 && ret < sizeof(buf)) {
+	if (ret > 0 && (size_t)ret < sizeof(buf)) {
 		str_chomp(buf);
 		if (humanize) {
 			float seconds = strtof(buf, NULL) / 1000000000.0;
@@ -219,7 +216,7 @@ static void print_stats(struct lxc_container *c)
 	}
 
 	ret = c->get_cgroup_item(c, "blkio.throttle.io_service_bytes", buf, sizeof(buf));
-	if (ret > 0 && ret < sizeof(buf)) {
+	if (ret > 0 && (size_t)ret < sizeof(buf)) {
 		char *ch;
 
 		/* put ch on last "Total" line */
@@ -249,7 +246,7 @@ static void print_stats(struct lxc_container *c)
 
 	for (i = 0; lxstat[i].name; i++) {
 		ret = c->get_cgroup_item(c, lxstat[i].file, buf, sizeof(buf));
-		if (ret > 0 && ret < sizeof(buf)) {
+		if (ret > 0 && (size_t)ret < sizeof(buf)) {
 			str_chomp(buf);
 			str_size_humanize(buf, sizeof(buf));
 			printf("%-15s %s\n", lxstat[i].name, buf);
@@ -394,6 +391,7 @@ static int print_info(const char *name, const char *lxcpath)
 int main(int argc, char *argv[])
 {
 	int ret = EXIT_FAILURE;
+	struct lxc_log log;
 
 	if (lxc_arguments_parse(&my_args, argc, argv))
 		exit(ret);
@@ -401,10 +399,15 @@ int main(int argc, char *argv[])
 	if (!my_args.log_file)
 		my_args.log_file = "none";
 
-	if (lxc_log_init(my_args.name, my_args.log_file, my_args.log_priority,
-			 my_args.progname, my_args.quiet, my_args.lxcpath[0]))
+	log.name = my_args.name;
+	log.file = my_args.log_file;
+	log.level = my_args.log_priority;
+	log.prefix = my_args.progname;
+	log.quiet = my_args.quiet;
+	log.lxcpath = my_args.lxcpath[0];
+
+	if (lxc_log_init(&log))
 		exit(ret);
-	lxc_log_options_no_override();
 
 	if (print_info(my_args.name, my_args.lxcpath[0]) == 0)
 		ret = EXIT_SUCCESS;

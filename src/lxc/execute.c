@@ -49,14 +49,14 @@ static int execute_start(struct lxc_handler *handler, void* data)
 
 	while (my_args->argv[argc++]);
 
-	argc_add = 4;
+	/* lxc-init -n name -- [argc] NULL -> 5 */
+	argc_add = 5;
 	if (my_args->quiet)
 		argc_add++;
-	if (!handler->conf->rootfs.path) {
-		argc_add += 4;
-		if (lxc_log_has_valid_level())
-			argc_add += 2;
-	}
+	if (!handler->conf->rootfs.path)
+		argc_add += 2;
+	if (lxc_log_has_valid_level())
+		argc_add += 2;
 
 	argv = malloc((argc + argc_add) * sizeof(*argv));
 	if (!argv)
@@ -64,33 +64,41 @@ static int execute_start(struct lxc_handler *handler, void* data)
 
 	initpath = choose_init(NULL);
 	if (!initpath) {
-		ERROR("Failed to find an lxc-init or init.lxc");
+		ERROR("Failed to find an init.lxc or init.lxc.static");
 		goto out2;
 	}
 	argv[i++] = initpath;
+
+	argv[i++] = "-n";
+	argv[i++] = (char *)handler->name;
+
+	if (lxc_log_has_valid_level()) {
+		argv[i++] = "-l";
+		argv[i++] = (char *)lxc_log_priority_to_string(lxc_log_get_level());
+	}
+
+	if (handler->conf->logfile) {
+		argv[i++] = "-o";
+		argv[i++] = (char *)handler->conf->logfile;
+	}
+
 	if (my_args->quiet)
 		argv[i++] = "--quiet";
-	if (!handler->conf->rootfs.path) {
-		argv[i++] = "--name";
-		argv[i++] = (char *)handler->name;
-		argv[i++] = "--lxcpath";
-		argv[i++] = (char *)handler->lxcpath;
 
-		if (lxc_log_has_valid_level()) {
-			argv[i++] = "--logpriority";
-			argv[i++] = (char *)
-				lxc_log_priority_to_string(lxc_log_get_level());
-		}
+	if (!handler->conf->rootfs.path) {
+		argv[i++] = "-P";
+		argv[i++] = (char *)handler->lxcpath;
 	}
+
 	argv[i++] = "--";
 	for (j = 0; j < argc; j++)
 		argv[i++] = my_args->argv[j];
 	argv[i++] = NULL;
 
-	NOTICE("exec'ing '%s'", my_args->argv[0]);
+	NOTICE("Exec'ing \"%s\"", my_args->argv[0]);
 
 	execvp(argv[0], argv);
-	SYSERROR("failed to exec %s", argv[0]);
+	SYSERROR("Failed to exec %s", argv[0]);
 	free(initpath);
 out2:
 	free(argv);
@@ -111,16 +119,15 @@ static struct lxc_operations execute_start_ops = {
 };
 
 int lxc_execute(const char *name, char *const argv[], int quiet,
-		struct lxc_conf *conf, const char *lxcpath, bool backgrounded)
+		struct lxc_handler *handler, const char *lxcpath,
+		bool backgrounded, int *error_num)
 {
-	struct execute_args args = {
-		.argv = argv,
-		.quiet = quiet
-	};
+	struct execute_args args = {.argv = argv, .quiet = quiet};
 
-	if (lxc_check_inherited(conf, false, -1))
+	if (lxc_check_inherited(handler->conf, false, &handler->conf->maincmd_fd, 1))
 		return -1;
 
-	conf->is_execute = 1;
-	return __lxc_start(name, conf, &execute_start_ops, &args, lxcpath, backgrounded);
+	handler->conf->is_execute = 1;
+	return __lxc_start(name, handler, &execute_start_ops, &args, lxcpath,
+			   backgrounded, error_num);
 }
