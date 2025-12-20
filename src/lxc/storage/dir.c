@@ -1,37 +1,23 @@
-/*
- * lxc: linux Container library
- *
- * (C) Copyright IBM Corp. 2007, 2008
- *
- * Authors:
- * Daniel Lezcano <daniel.lezcano at free.fr>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
-#define _GNU_SOURCE
+#include "config.h"
+
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "log.h"
+#include "macro.h"
+#include "memory_utils.h"
+#include "mount_utils.h"
+#include "open_utils.h"
 #include "storage.h"
 #include "utils.h"
 
 lxc_log_define(dir, lxc);
 
-/* For a simple directory bind mount, we substitute the old container name and
+/*
+ * For a simple directory bind mount, we substitute the old container name and
  * paths for the new.
  */
 int dir_clonepaths(struct lxc_storage *orig, struct lxc_storage *new,
@@ -43,77 +29,65 @@ int dir_clonepaths(struct lxc_storage *orig, struct lxc_storage *new,
 	int ret;
 	size_t len;
 
-	if (snap) {
-		ERROR("Directories cannot be snapshotted");
-		return -1;
-	}
+	if (snap)
+		return log_error_errno(-EINVAL, EINVAL, "Directories cannot be snapshotted");
 
 	if (!orig->dest || !orig->src)
-		return -1;
+		return ret_errno(EINVAL);
 
-	len = strlen(lxcpath) + strlen(cname) + strlen("rootfs") + 4 + 3;
+	len = STRLITERALLEN("dir:") + strlen(lxcpath) + STRLITERALLEN("/") +
+	      strlen(cname) + STRLITERALLEN("/rootfs") + 1;
 	new->src = malloc(len);
-	if (!new->src) {
-		ERROR("Failed to allocate memory");
-		return -1;
-	}
+	if (!new->src)
+		return ret_errno(ENOMEM);
 
 	ret = snprintf(new->src, len, "dir:%s/%s/rootfs", lxcpath, cname);
-	if (ret < 0 || (size_t)ret >= len) {
-		ERROR("Failed to create string");
-		return -1;
-	}
+	if (ret < 0 || (size_t)ret >= len)
+		return ret_errno(EIO);
 
 	src_no_prefix = lxc_storage_get_path(new->src, new->type);
 	new->dest = strdup(src_no_prefix);
-	if (!new->dest) {
-		ERROR("Failed to duplicate string \"%s\"", new->src);
-		return -1;
-	}
+	if (!new->dest)
+		return log_error_errno(-ENOMEM, ENOMEM, "Failed to duplicate string \"%s\"", new->src);
 
 	TRACE("Created new path \"%s\" for dir storage driver", new->dest);
 	return 0;
 }
 
 int dir_create(struct lxc_storage *bdev, const char *dest, const char *n,
-	       struct bdev_specs *specs)
+	       struct bdev_specs *specs, const struct lxc_conf *conf)
 {
+	__do_free char *bdev_src = NULL, *bdev_dest = NULL;
 	int ret;
 	const char *src;
 	size_t len;
 
-	/* strlen("dir:") */
-	len = 4;
+	len = STRLITERALLEN("dir:");
 	if (specs && specs->dir)
 		src = specs->dir;
 	else
 		src = dest;
 
 	len += strlen(src) + 1;
-	bdev->src = malloc(len);
-	if (!bdev->src) {
-		ERROR("Failed to allocate memory");
-		return -1;
-	}
+	bdev_src = malloc(len);
+	if (!bdev_src)
+		return ret_errno(ENOMEM);
 
-	ret = snprintf(bdev->src, len, "dir:%s", src);
-	if (ret < 0 || (size_t)ret >= len) {
-		ERROR("Failed to create string");
-		return -1;
-	}
+	ret = snprintf(bdev_src, len, "dir:%s", src);
+	if (ret < 0 || (size_t)ret >= len)
+		return ret_errno(EIO);
 
-	bdev->dest = strdup(dest);
-	if (!bdev->dest) {
-		ERROR("Failed to duplicate string \"%s\"", dest);
-		return -1;
-	}
+	bdev_dest = strdup(dest);
+	if (!bdev_dest)
+		return ret_errno(ENOMEM);
 
-	ret = mkdir_p(dest, 0755);
-	if (ret < 0) {
-		ERROR("Failed to create directory \"%s\"", dest);
-		return -1;
-	}
+	ret = lxc_mkdir_p(dest, 0755);
+	if (ret < 0)
+		return log_error_errno(-errno, errno, "Failed to create directory \"%s\"", dest);
+
 	TRACE("Created directory \"%s\"", dest);
+	bdev->src = move_ptr(bdev_src);
+	bdev->dest = move_ptr(bdev_dest);
 
 	return 0;
 }
@@ -126,10 +100,8 @@ int dir_destroy(struct lxc_storage *orig)
 	src = lxc_storage_get_path(orig->src, orig->src);
 
 	ret = lxc_rmdir_onedev(src, NULL);
-	if (ret < 0) {
-		ERROR("Failed to delete \"%s\"", src);
-		return -1;
-	}
+	if (ret < 0)
+		return log_error_errno(ret, errno, "Failed to delete \"%s\"", src);
 
 	return 0;
 }
@@ -143,10 +115,8 @@ bool dir_detect(const char *path)
 		return true;
 
 	ret = stat(path, &statbuf);
-	if (ret == -1 && errno == EPERM) {
-		SYSERROR("dir_detect: failed to look at \"%s\"", path);
-		return false;
-	}
+	if (ret == -1 && errno == EPERM)
+		return log_error_errno(false, errno, "dir_detect: failed to look at \"%s\"", path);
 
 	if (ret == 0 && S_ISDIR(statbuf.st_mode))
 		return true;
@@ -156,53 +126,85 @@ bool dir_detect(const char *path)
 
 int dir_mount(struct lxc_storage *bdev)
 {
+	struct lxc_rootfs *rootfs = bdev->rootfs;
+	struct lxc_mount_options *mnt_opts = &rootfs->mnt_opts;
 	int ret;
-	unsigned long mflags, mntflags;
-	char *mntdata;
-	const char *src;
+	const char *source, *target;
 
-	if (strcmp(bdev->type, "dir"))
-		return -22;
+	if (!strequal(bdev->type, "dir"))
+		return syserror_set(-EINVAL, "Invalid storage driver");
 
-	if (!bdev->src || !bdev->dest)
-		return -22;
+	if (is_empty_string(bdev->src))
+		return syserror_set(-EINVAL, "Missing rootfs path");
 
-	ret = parse_mntopts(bdev->mntopts, &mntflags, &mntdata);
-	if (ret < 0) {
-		ERROR("Failed to parse mount options \"%s\"", bdev->mntopts);
-		free(mntdata);
-		return -22;
+	if (is_empty_string(bdev->dest))
+		return syserror_set(-EINVAL, "Missing target mountpoint");
+
+	if (rootfs->dfd_idmapped >= 0 && !can_use_bind_mounts())
+		return syserror_set(-EOPNOTSUPP, "Idmapped mount requested but kernel doesn't support new mount API");
+
+	source = lxc_storage_get_path(bdev->src, bdev->type);
+	target = bdev->dest;
+
+	if (can_use_bind_mounts()) {
+		__do_close int fd_source = -EBADF, fd_target = -EBADF;
+
+		fd_target = open_at(-EBADF, target, PROTECT_OPATH_DIRECTORY, 0, 0);
+		if (fd_target < 0)
+			return syserror("Failed to open \"%s\"", target);
+
+		if (rootfs->dfd_idmapped >= 0) {
+			ret = move_detached_mount(rootfs->dfd_idmapped, fd_target, "",
+						  PROTECT_OPATH_DIRECTORY,
+						  PROTECT_LOOKUP_BENEATH);
+		} else {
+			fd_source = open_at(-EBADF, source, PROTECT_OPATH_DIRECTORY, 0, 0);
+			if (fd_source < 0)
+				return syserror("Failed to open \"%s\"", source);
+
+			ret = fd_bind_mount(fd_source, "",
+					    PROTECT_OPATH_DIRECTORY,
+					    PROTECT_LOOKUP_BENEATH,
+					    fd_target, "",
+					    PROTECT_OPATH_DIRECTORY,
+					    PROTECT_LOOKUP_BENEATH,
+					    mnt_opts->attr.attr_set,
+                                            mnt_opts->attr.attr_clr,
+                                            mnt_opts->attr.propagation,
+					    true);
+		}
+	} else {
+		ret = mount(source, target, "bind", MS_BIND | MS_REC | mnt_opts->mnt_flags | mnt_opts->prop_flags, mnt_opts->data);
+		if (!ret && (mnt_opts->mnt_flags & MS_RDONLY)) {
+			unsigned long mflags;
+
+			mflags = add_required_remount_flags(source, target,
+							    MS_BIND |
+							    MS_REC |
+							    mnt_opts->mnt_flags |
+							    MS_REMOUNT);
+
+			ret = mount(source, target, "bind", mflags, mnt_opts->data);
+			if (ret)
+				SYSERROR("Failed to remount \"%s\" on \"%s\" read-only", source, target);
+			else
+				TRACE("Remounted \"%s\" on \"%s\" read-only", source, target);
+		}
 	}
+	if (ret < 0)
+		return syserror_set(ret, "Failed to mount \"%s\" onto \"%s\"", source, target);
 
-	src = lxc_storage_get_path(bdev->src, bdev->type);
-
-	ret = mount(src, bdev->dest, "bind", MS_BIND | MS_REC | mntflags,
-		    mntdata);
-	if ((0 == ret) && (mntflags & MS_RDONLY)) {
-		DEBUG("Remounting \"%s\" on \"%s\" readonly",
-		      src ? src : "(none)", bdev->dest ? bdev->dest : "(none)");
-		mflags = add_required_remount_flags(src, bdev->dest, MS_BIND | MS_REC | mntflags | MS_REMOUNT);
-		ret = mount(src, bdev->dest, "bind", mflags, mntdata);
-	}
-
-	if (ret < 0) {
-		SYSERROR("Failed to mount \"%s\" on \"%s\"", src, bdev->dest);
-		free(mntdata);
-		return -1;
-	}
-
-	TRACE("Mounted \"%s\" on \"%s\"", src, bdev->dest);
-	free(mntdata);
-	return ret;
+	TRACE("Mounted \"%s\" onto \"%s\"", source, target);
+	return 0;
 }
 
 int dir_umount(struct lxc_storage *bdev)
 {
 	if (strcmp(bdev->type, "dir"))
-		return -22;
+		return ret_errno(EINVAL);
 
 	if (!bdev->src || !bdev->dest)
-		return -22;
+		return ret_errno(EINVAL);
 
-	return umount(bdev->dest);
+	return umount2(bdev->dest, MNT_DETACH);
 }

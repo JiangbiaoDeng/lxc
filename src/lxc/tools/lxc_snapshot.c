@@ -1,36 +1,22 @@
-/*
- *
- * Copyright © 2013 Serge Hallyn <serge.hallyn@ubuntu.com>.
- * Copyright © 2013 Canonical Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2, as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- */
+/* SPDX-License-Identifier: GPL-2.0-only */
 
-#define _GNU_SOURCE
+#include "config.h"
+
 #include <ctype.h>
 #include <fcntl.h>
 #include <libgen.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/types.h>
+#include <unistd.h>
 
-#include <lxc/lxccontainer.h>
+#include "lxc.h"
 
 #include "arguments.h"
-#include "tool_utils.h"
+#include "log.h"
+
+lxc_log_define(lxc_snapshot, lxc);
 
 static int my_parser(struct lxc_arguments *args, int c, char *arg);
 
@@ -65,6 +51,8 @@ Options :\n\
 	.parser = my_parser,
 	.checker = NULL,
 	.task = SNAP,
+	.log_priority = "ERROR",
+	.log_file     = "none",
 };
 
 static int do_snapshot(struct lxc_container *c, char *commentfile);
@@ -75,7 +63,8 @@ static int do_snapshot_restore(struct lxc_container *c,
 static int do_snapshot_task(struct lxc_container *c, enum task task);
 static void print_file(char *path);
 
-int main(int argc, char *argv[])
+int __attribute__((weak, alias("lxc_snapshot_main"))) main(int argc, char *argv[]);
+int lxc_snapshot_main(int argc, char *argv[])
 {
 	struct lxc_container *c;
 	struct lxc_log log;
@@ -84,57 +73,57 @@ int main(int argc, char *argv[])
 	if (lxc_arguments_parse(&my_args, argc, argv))
 		exit(EXIT_FAILURE);
 
-	if (!my_args.log_file)
-		my_args.log_file = "none";
+	/* Only create log if explicitly instructed */
+	if (my_args.log_file || my_args.log_priority) {
+		log.name = my_args.name;
+		log.file = my_args.log_file;
+		log.level = my_args.log_priority;
+		log.prefix = my_args.progname;
+		log.quiet = my_args.quiet;
+		log.lxcpath = my_args.lxcpath[0];
 
-	log.name = my_args.name;
-	log.file = my_args.log_file;
-	log.level = my_args.log_priority;
-	log.prefix = my_args.progname;
-	log.quiet = my_args.quiet;
-	log.lxcpath = my_args.lxcpath[0];
-
-	if (lxc_log_init(&log))
-		exit(EXIT_FAILURE);
+		if (lxc_log_init(&log))
+			exit(EXIT_FAILURE);
+	}
 
 	if (geteuid()) {
 		if (access(my_args.lxcpath[0], O_RDONLY) < 0) {
-			fprintf(stderr, "You lack access to %s\n",
-				my_args.lxcpath[0]);
+			ERROR("You lack access to %s", my_args.lxcpath[0]);
 			exit(EXIT_FAILURE);
 		}
 	}
 
 	c = lxc_container_new(my_args.name, my_args.lxcpath[0]);
 	if (!c) {
-		fprintf(stderr, "System error loading container\n");
+		ERROR("System error loading container");
 		exit(EXIT_FAILURE);
 	}
 
 	if (my_args.rcfile) {
 		c->clear_config(c);
+
 		if (!c->load_config(c, my_args.rcfile)) {
-			fprintf(stderr, "Failed to load rcfile\n");
+			ERROR("Failed to load rcfile");
 			lxc_container_put(c);
 			exit(EXIT_FAILURE);
 		}
+
 		c->configfile = strdup(my_args.rcfile);
 		if (!c->configfile) {
-			fprintf(stderr, "Out of memory setting new config filename\n");
+			ERROR("Out of memory setting new config filename");
 			lxc_container_put(c);
 			exit(EXIT_FAILURE);
 		}
 	}
 
 	if (!c->lxc_conf) {
-		fprintf(stderr, "No container config specified\n");
+		ERROR("No container config specified");
 		lxc_container_put(c);
 		exit(EXIT_FAILURE);
 	}
 
 	if (!c->may_control(c)) {
-		fprintf(stderr, "Insufficent privileges to control %s\n",
-			my_args.name);
+		ERROR("Insufficent privileges to control %s", my_args.name);
 		lxc_container_put(c);
 		exit(EXIT_FAILURE);
 	}
@@ -145,6 +134,7 @@ int main(int argc, char *argv[])
 
 	if (ret == 0)
 		exit(EXIT_SUCCESS);
+
 	exit(EXIT_FAILURE);
 }
 
@@ -207,7 +197,7 @@ static int do_snapshot(struct lxc_container *c, char *commentfile)
 
 	ret = c->snapshot(c, commentfile);
 	if (ret < 0) {
-		fprintf(stderr, "Error creating a snapshot\n");
+		ERROR("Error creating a snapshot");
 		return -1;
 	}
 
@@ -218,13 +208,13 @@ static int do_snapshot_destroy(struct lxc_container *c, char *snapname)
 {
 	bool ret;
 
-	if (strcmp(snapname, "ALL") == 0)
+	if (strncmp(snapname, "ALL", strlen(snapname)) == 0)
 		ret = c->snapshot_destroy_all(c);
 	else
 		ret = c->snapshot_destroy(c, snapname);
 
 	if (!ret) {
-		fprintf(stderr, "Error destroying snapshot %s\n", snapname);
+		ERROR("Error destroying snapshot %s", snapname);
 		return -1;
 	}
 
@@ -238,9 +228,10 @@ static int do_snapshot_list(struct lxc_container *c, int print_comments)
 
 	n = c->snapshot_list(c, &s);
 	if (n < 0) {
-		fprintf(stderr, "Error listing snapshots\n");
+		ERROR("Error listing snapshots");
 		return -1;
 	}
+
 	if (n == 0) {
 		printf("No snapshots\n");
 		return 0;
@@ -248,8 +239,10 @@ static int do_snapshot_list(struct lxc_container *c, int print_comments)
 
 	for (i = 0; i < n; i++) {
 		printf("%s (%s) %s\n", s[i].name, s[i].lxcpath, s[i].timestamp);
+
 		if (print_comments)
 			print_file(s[i].comment_pathname);
+
 		s[i].free(&s[i]);
 	}
 
@@ -269,7 +262,7 @@ static int do_snapshot_restore(struct lxc_container *c,
 	 * original container will be destroyed and the restored container will
 	 * take its place. */
 	if ((!args->newname) && (args->argc > 1)) {
-		lxc_error(args, "Too many arguments");
+		ERROR("Too many arguments");
 		return -1;
 	}
 
@@ -278,7 +271,7 @@ static int do_snapshot_restore(struct lxc_container *c,
 
 	bret = c->snapshot_restore(c, args->snapname, args->newname);
 	if (!bret) {
-		fprintf(stderr, "Error restoring snapshot %s\n", args->snapname);
+		ERROR("Error restoring snapshot %s", args->snapname);
 		return -1;
 	}
 
@@ -287,19 +280,19 @@ static int do_snapshot_restore(struct lxc_container *c,
 
 static void print_file(char *path)
 {
-	if (!path)
-		return;
-
-	FILE *f = fopen(path, "r");
+	FILE *f;
 	char *line = NULL;
 	size_t sz = 0;
 
+	if (!path)
+		return;
+
+	f = fopen(path, "r");
 	if (!f)
 		return;
 
-	while (getline(&line, &sz, f) != -1) {
+	while (getline(&line, &sz, f) != -1)
 		printf("%s", line);
-	}
 
 	free(line);
 	fclose(f);

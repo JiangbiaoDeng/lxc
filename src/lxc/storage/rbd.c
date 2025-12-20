@@ -1,28 +1,7 @@
-/*
- * lxc: linux Container library
- *
- * (C) Copyright IBM Corp. 2007, 2008
- *
- * Authors:
- * Daniel Lezcano <daniel.lezcano at free.fr>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
-#define _GNU_SOURCE
-#define __STDC_FORMAT_MACROS /* Required for PRIu64 to work. */
+#include "config.h"
+
 #include <inttypes.h>	/* Required for PRIu64 to work. */
 #include <stdint.h>
 #include <stdio.h>
@@ -30,52 +9,79 @@
 #include <string.h>
 
 #include "log.h"
+#include "memory_utils.h"
 #include "storage.h"
 #include "storage_utils.h"
 #include "utils.h"
+
+#if !HAVE_STRLCPY
+#include "strlcpy.h"
+#endif
 
 lxc_log_define(rbd, lxc);
 
 struct rbd_args {
 	const char *osd_pool_name;
+	const char *rbd_user;
 	const char *rbd_name;
 	const char *size;
 };
 
-int rbd_create_wrapper(void *data)
+static int rbd_create_wrapper(void *data)
 {
 	struct rbd_args *args = data;
 
-	execlp("rbd", "rbd", "create", "--pool", args->osd_pool_name,
+	if (args->rbd_user){
+		execlp("rbd", "rbd", "create", "--id", args->rbd_user, "--pool", 
+			args->osd_pool_name, args->rbd_name, "--size", args->size, 
+			(char *)NULL);
+	} else {
+		execlp("rbd", "rbd", "create", "--pool", args->osd_pool_name,
 	       args->rbd_name, "--size", args->size, (char *)NULL);
+	}
 
 	return -1;
 }
 
-int rbd_map_wrapper(void *data)
+static int rbd_map_wrapper(void *data)
 {
 	struct rbd_args *args = data;
 
-	execlp("rbd", "rbd", "map", "--pool", args->osd_pool_name,
+	if (args->rbd_user){
+		execlp("rbd", "rbd", "map", "--id", args->rbd_user, "--pool", 
+			args->osd_pool_name, args->rbd_name, (char *)NULL);
+	} else {
+		execlp("rbd", "rbd", "map", "--pool", args->osd_pool_name,
 	       args->rbd_name, (char *)NULL);
+	}
+	return -1;
+}
+
+static int rbd_unmap_wrapper(void *data)
+{
+	struct rbd_args *args = data;
+
+	if (args->rbd_user){
+		execlp("rbd", "rbd", "unmap", "--id", args->rbd_user, args->rbd_name, 
+			(char *)NULL);
+	} else {
+		execlp("rbd", "rbd", "unmap", args->rbd_name, (char *)NULL);
+	}
+
 
 	return -1;
 }
 
-int rbd_unmap_wrapper(void *data)
+static int rbd_delete_wrapper(void *data)
 {
 	struct rbd_args *args = data;
 
-	execlp("rbd", "rbd", "unmap", args->rbd_name, (char *)NULL);
-
-	return -1;
-}
-
-int rbd_delete_wrapper(void *data)
-{
-	struct rbd_args *args = data;
-
-	execlp("rbd", "rbd", "rm", args->rbd_name, (char *)NULL);
+	if (args->rbd_user){
+		execlp("rbd", "rbd", "rm", "--id", args->rbd_user, args->rbd_name, 
+			(char *)NULL);
+	} else {
+		execlp("rbd", "rbd", "rm", args->rbd_name, (char *)NULL);
+	}
 
 	return -1;
 }
@@ -90,15 +96,16 @@ int rbd_clonepaths(struct lxc_storage *orig, struct lxc_storage *new,
 }
 
 int rbd_create(struct lxc_storage *bdev, const char *dest, const char *n,
-	       struct bdev_specs *specs)
+	       struct bdev_specs *specs, const struct lxc_conf *conf)
 {
 	const char *rbdpool, *fstype;
 	uint64_t size;
 	int ret, len;
 	char sz[24];
 	const char *cmd_args[2];
-	char cmd_output[MAXPATHLEN];
+	char cmd_output[PATH_MAX];
 	const char *rbdname = n;
+	const char *rbduser;
 	struct rbd_args args = {0};
 
 	if (!specs)
@@ -110,6 +117,10 @@ int rbd_create(struct lxc_storage *bdev, const char *dest, const char *n,
 
 	if (specs->rbd.rbdname)
 		rbdname = specs->rbd.rbdname;
+	
+	rbduser = specs->rbd.rbduser;
+	if (!rbduser)
+		rbduser = lxc_global_config_value("lxc.bdev.rbd.rbduser");
 
 	/* source device /dev/rbd/lxc/ctn */
 	len = strlen(rbdpool) + strlen(rbdname) + 4 + 11;
@@ -139,6 +150,7 @@ int rbd_create(struct lxc_storage *bdev, const char *dest, const char *n,
 
 	args.osd_pool_name = rbdpool;
 	args.rbd_name = rbdname;
+	args.rbd_user = rbduser;
 	args.size = sz;
 	ret = run_command(cmd_output, sizeof(cmd_output), rbd_create_wrapper,
 			  (void *)&args);
@@ -176,7 +188,7 @@ int rbd_create(struct lxc_storage *bdev, const char *dest, const char *n,
 		return -1;
 	}
 
-	ret = mkdir_p(bdev->dest, 0755);
+	ret = lxc_mkdir_p(bdev->dest, 0755);
 	if (ret < 0 && errno != EEXIST) {
 		ERROR("Failed to create directory \"%s\"", bdev->dest);
 		return -1;
@@ -188,11 +200,14 @@ int rbd_create(struct lxc_storage *bdev, const char *dest, const char *n,
 
 int rbd_destroy(struct lxc_storage *orig)
 {
+	__do_free char *rbdfullname = NULL;
 	int ret;
 	const char *src;
-	char *rbdfullname;
-	char cmd_output[MAXPATHLEN];
+	char cmd_output[PATH_MAX];
 	struct rbd_args args = {0};
+	size_t len;
+
+	args.rbd_user = lxc_global_config_value("lxc.bdev.rbd.rbduser");
 
 	src = lxc_storage_get_path(orig->src, orig->type);
 	if (file_exists(src)) {
@@ -206,9 +221,11 @@ int rbd_destroy(struct lxc_storage *orig)
 		}
 	}
 
-	rbdfullname = alloca(strlen(src) - 8);
-	strcpy(rbdfullname, &src[9]);
+	len = strlen(src);
+	rbdfullname = must_realloc(NULL, len - 8);
+	(void)strlcpy(rbdfullname, &src[9], len - 8);
 	args.rbd_name = rbdfullname;
+
 	ret = run_command(cmd_output, sizeof(cmd_output),
 			rbd_delete_wrapper, (void *)&args);
 	if (ret < 0) {

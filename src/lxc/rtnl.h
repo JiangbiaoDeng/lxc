@@ -1,28 +1,11 @@
-/*
- * lxc: linux Container library
- *
- * (C) Copyright IBM Corp. 2007, 2008
- *
- * Authors:
- * Daniel Lezcano <daniel.lezcano at free.fr>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
 #ifndef __LXC_RTNL_H
 #define __LXC_RTNL_H
+
+#include "config.h"
+
+#include <compiler.h>
 
 /*
  * Use this as a good size to allocate route netlink messages
@@ -59,16 +42,14 @@ struct rtnlmsg {
  *
  * Returns 0 on success, < 0 otherwise
  */
-extern int rtnetlink_open(struct rtnl_handler *handler);
+__hidden extern int rtnetlink_open(struct rtnl_handler *handler);
 
 /*
  * genetlink_close : close a route netlink socket
  *
  * @handler: the handler of the socket to be closed
- *
- * Returns 0 on success, < 0 otherwise
  */
-extern int rtnetlink_close(struct rtnl_handler *handler);
+__hidden extern void rtnetlink_close(struct rtnl_handler *handler);
 
 /*
  * rtnetlink_rcv : receive a route netlink socket, it is up
@@ -79,7 +60,7 @@ extern int rtnetlink_close(struct rtnl_handler *handler);
  *
  * Returns 0 on success, < 0 otherwise
  */
-extern int rtnetlink_rcv(struct rtnl_handler *handler, struct rtnlmsg *rtnlmsg);
+__hidden extern int rtnetlink_rcv(struct rtnl_handler *handler, struct rtnlmsg *rtnlmsg);
 
 /*
  * rtnetlink_send : send a route netlink socket, it is up
@@ -90,12 +71,11 @@ extern int rtnetlink_rcv(struct rtnl_handler *handler, struct rtnlmsg *rtnlmsg);
  *
  * Returns 0 on success, < 0 otherwise
  */
-extern int rtnetlink_send(struct rtnl_handler *handler,
-			  struct rtnlmsg *rtnlmsg);
+__hidden extern int rtnetlink_send(struct rtnl_handler *handler, struct rtnlmsg *rtnlmsg);
 
-struct genlmsg *genlmsg_alloc(size_t size);
+__hidden struct genlmsg *genlmsg_alloc(size_t size);
 
-extern void rtnlmsg_free(struct rtnlmsg *rtnlmsg);
+__hidden extern void rtnlmsg_free(struct rtnlmsg *rtnlmsg);
 
 /*
  * rtnetlink_transaction : send and receive a route netlink message in one shot
@@ -106,8 +86,9 @@ extern void rtnlmsg_free(struct rtnlmsg *rtnlmsg);
  *
  * Returns 0 on success, < 0 otherwise
  */
-extern int rtnetlink_transaction(struct rtnl_handler *handler,
-				 struct rtnlmsg *request,
-				 struct rtnlmsg *answer);
+__hidden extern int rtnetlink_transaction(struct rtnl_handler *handler, struct rtnlmsg *request,
+					  struct rtnlmsg *answer);
+
+__hidden struct rtnlmsg *rtnlmsg_alloc(size_t size);
 
 #endif /* __LXC_RTNL_H */

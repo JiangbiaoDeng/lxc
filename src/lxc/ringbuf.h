@@ -1,29 +1,16 @@
-/* liblxcapi
- *
- * Copyright © 2017 Christian Brauner <christian.brauner@ubuntu.com>.
- * Copyright © 2017 Canonical Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2, as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
 #ifndef __LXC_RINGBUF_H
 #define __LXC_RINGBUF_H
+
+#include "config.h"
 
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <sys/mman.h>
+
+#include "compiler.h"
 
 /**
  * lxc_ringbuf - Implements a simple and efficient memory mapped ringbuffer.
@@ -46,14 +33,15 @@ struct lxc_ringbuf {
  *
  * @param[in] size	Size of the new ringbuffer as a power of 2.
  */
-extern int lxc_ringbuf_create(struct lxc_ringbuf *buf, size_t size);
-extern void lxc_ringbuf_move_read_addr(struct lxc_ringbuf *buf, size_t len);
-extern int lxc_ringbuf_write(struct lxc_ringbuf *buf, const char *msg, size_t len);
-extern int lxc_ringbuf_read(struct lxc_ringbuf *buf, char *out, size_t *len);
+__hidden extern int lxc_ringbuf_create(struct lxc_ringbuf *buf, size_t size);
+__hidden extern void lxc_ringbuf_move_read_addr(struct lxc_ringbuf *buf, size_t len);
+__hidden extern int lxc_ringbuf_write(struct lxc_ringbuf *buf, const char *msg, size_t len);
+__hidden extern int lxc_ringbuf_read(struct lxc_ringbuf *buf, char *out, size_t *len);
 
 static inline void lxc_ringbuf_release(struct lxc_ringbuf *buf)
 {
-	munmap(buf->addr, buf->size * 2);
+	if (buf->addr)
+		munmap(buf->addr, buf->size * 2);
 }
 
 static inline void lxc_ringbuf_clear(struct lxc_ringbuf *buf)

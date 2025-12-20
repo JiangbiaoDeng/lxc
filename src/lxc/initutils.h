@@ -1,28 +1,9 @@
-/*
- * lxc: linux Container library
- *
- * (C) Copyright IBM Corp. 2007, 2008
- *
- * Authors:
- * Daniel Lezcano <daniel.lezcano at free.fr>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
 #ifndef __LXC_INITUTILS_H
 #define __LXC_INITUTILS_H
+
+#include "config.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -31,17 +12,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/mount.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
-#include "config.h"
+#include "compiler.h"
+#include "string_utils.h"
 
 #define DEFAULT_VG "lxc"
 #define DEFAULT_THIN_POOL "lxc"
 #define DEFAULT_ZFSROOT "lxc"
 #define DEFAULT_RBDPOOL "lxc"
+#define DEFAULT_RBDUSER NULL
 
 #ifndef PR_SET_MM
 #define PR_SET_MM 35
@@ -68,12 +52,10 @@ struct prctl_mm_map {
 };
 #endif
 
-extern void lxc_setup_fs(void);
-extern const char *lxc_global_config_value(const char *option_name);
+__hidden extern const char *lxc_global_config_value(const char *option_name);
 
-/* open a file with O_CLOEXEC */
-extern void remove_trailing_slashes(char *p);
-extern FILE *fopen_cloexec(const char *path, const char *mode);
-extern int setproctitle(char *title);
+__hidden extern int setproctitle(char *title);
+
+__hidden __noreturn int lxc_container_init(int argc, char *const *argv, bool quiet);
 
 #endif /* __LXC_INITUTILS_H */

@@ -1,51 +1,35 @@
-/*
- * lxc: linux Container library
- *
- * Copyright © 2017 Canonical Ltd.
- *
- * Authors:
- * Serge Hallyn <serge.hallyn@ubuntu.com>
- * Christian Brauner <christian.brauner@ubuntu.com>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
 #ifndef __LXC_CGROUP_UTILS_H
 #define __LXC_CGROUP_UTILS_H
 
+#include "config.h"
+
 #include <stdbool.h>
 #include <stdio.h>
 
-/* Retrieve the cgroup version of a given entry from /proc/<pid>/mountinfo. */
-extern int get_cgroup_version(char *line);
+#include "compiler.h"
+#include "file_utils.h"
 
-/* Check if given entry from /proc/<pid>/mountinfo is a cgroupfs v1 mount. */
-extern bool is_cgroupfs_v1(char *line);
+__hidden extern bool unified_cgroup_fd(int fd);
 
-/* Check if given entry from /proc/<pid>/mountinfo is a cgroupfs v2 mount. */
-extern bool is_cgroupfs_v2(char *line);
+static inline bool cgns_supported(void)
+{
+	static int supported = -1;
 
-/* Given a v1 hierarchy @mountpoint and base @path, verify that we can create
- * directories underneath it.
+	if (supported == -1)
+		supported = file_exists("/proc/self/ns/cgroup");
+
+	return supported == 1;
+}
+
+__hidden extern int cgroup_tree_prune(int dfd, const char *path);
+
+/*
+ * This function can only be called on information parsed from
+ * /proc/<pid>/cgroup or on absolute paths and it will verify the latter and
+ * return NULL if a relative path is passed.
  */
-extern bool test_writeable_v1(char *mountpoint, char *path);
-
-/* Given a v2 hierarchy @mountpoint and base @path, verify that we can create
- * directories underneath it and that we have write access to the cgroup's
- * "cgroup.procs" file.
- */
-extern bool test_writeable_v2(char *mountpoint, char *path);
+__hidden extern char *prune_init_scope(char *path);
 
 #endif /* __LXC_CGROUP_UTILS_H */

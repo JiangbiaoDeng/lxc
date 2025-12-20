@@ -1,47 +1,71 @@
-/*
- * lxc: linux Container library
- *
- * (C) Copyright IBM Corp. 2007, 2008
- *
- * Authors:
- * Daniel Lezcano <daniel.lezcano at free.fr>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
-#define _GNU_SOURCE
+#include "config.h"
+
 #include <errno.h>
 #include <libgen.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
-#include <lxc/lxccontainer.h>
+#include "lxc.h"
 
 #include "arguments.h"
-#include "tool_list.h"
-#include "tool_utils.h"
+#include "caps.h"
+#include "confile.h"
+#include "log.h"
+#include "utils.h"
+
+lxc_log_define(lxc_execute, lxc);
+
+static int my_parser(struct lxc_arguments *args, int c, char *arg);
+static bool set_argv(struct lxc_container *c, struct lxc_arguments *args);
 
 static struct lxc_list defines;
 
-static int my_parser(struct lxc_arguments* args, int c, char* arg)
+static const struct option my_longopts[] = {
+	{"daemon", no_argument, 0, 'd'},
+	{"rcfile", required_argument, 0, 'f'},
+	{"define", required_argument, 0, 's'},
+	{"uid", required_argument, 0, 'u'},
+	{"gid", required_argument, 0, 'g'},
+	{"share-net", required_argument, 0, OPT_SHARE_NET},
+	{"share-ipc", required_argument, 0, OPT_SHARE_IPC},
+	{"share-uts", required_argument, 0, OPT_SHARE_UTS},
+	{"share-pid", required_argument, 0, OPT_SHARE_PID},
+	LXC_COMMON_OPTIONS
+};
+
+static struct lxc_arguments my_args = {
+	.progname     = "lxc-execute",
+	.help         = "\
+--name=NAME -- COMMAND\n\
+\n\
+lxc-execute creates a container with the identifier NAME\n\
+and execs COMMAND into this container.\n\
+\n\
+Options :\n\
+  -n, --name=NAME      NAME of the container\n\
+  -d, --daemon         Daemonize the container\n\
+  -f, --rcfile=FILE    Load configuration file FILE\n\
+  -s, --define KEY=VAL Assign VAL to configuration variable KEY\n\
+  -u, --uid=UID        Execute COMMAND with UID inside the container\n\
+  -g, --gid=GID        Execute COMMAND with GID inside the container\n",
+	.options      = my_longopts,
+	.parser       = my_parser,
+	.log_priority = "ERROR",
+	.log_file     = "none",
+	.daemonize    = 0,
+	.uid          = LXC_INVALID_UID,
+	.gid          = LXC_INVALID_GID,
+};
+
+static int my_parser(struct lxc_arguments *args, int c, char *arg)
 {
 	int ret;
 
@@ -81,45 +105,14 @@ static int my_parser(struct lxc_arguments* args, int c, char* arg)
 	return 0;
 }
 
-static const struct option my_longopts[] = {
-	{"daemon", no_argument, 0, 'd'},
-	{"rcfile", required_argument, 0, 'f'},
-	{"define", required_argument, 0, 's'},
-	{"uid", required_argument, 0, 'u'},
-	{"gid", required_argument, 0, 'g'},
-	{"share-net", required_argument, 0, OPT_SHARE_NET},
-	{"share-ipc", required_argument, 0, OPT_SHARE_IPC},
-	{"share-uts", required_argument, 0, OPT_SHARE_UTS},
-	{"share-pid", required_argument, 0, OPT_SHARE_PID},
-	LXC_COMMON_OPTIONS
-};
-
-static struct lxc_arguments my_args = {
-	.progname = "lxc-execute",
-	.help     = "\
---name=NAME -- COMMAND\n\
-\n\
-lxc-execute creates a container with the identifier NAME\n\
-and execs COMMAND into this container.\n\
-\n\
-Options :\n\
-  -n, --name=NAME      NAME of the container\n\
-  -f, --rcfile=FILE    Load configuration file FILE\n\
-  -s, --define KEY=VAL Assign VAL to configuration variable KEY\n\
-  -u, --uid=UID        Execute COMMAND with UID inside the container\n\
-  -g, --gid=GID        Execute COMMAND with GID inside the container\n",
-	.options  = my_longopts,
-	.parser   = my_parser,
-	.daemonize = 0,
-};
-
 static bool set_argv(struct lxc_container *c, struct lxc_arguments *args)
 {
 	int ret;
-	char buf[TOOL_MAXPATHLEN];
+	char buf[PATH_MAX];
 	char **components, **p;
 
-	ret = c->get_config_item(c, "lxc.execute.cmd", buf, TOOL_MAXPATHLEN);
+	buf[0] = '\0';
+	ret = c->get_config_item(c, "lxc.execute.cmd", buf, PATH_MAX);
 	if (ret < 0)
 		return false;
 
@@ -128,13 +121,15 @@ static bool set_argv(struct lxc_container *c, struct lxc_arguments *args)
 		return false;
 
 	args->argv = components;
+
 	for (p = components; *p; p++)
 		args->argc++;
 
 	return true;
 }
 
-int main(int argc, char *argv[])
+int __attribute__((weak, alias("lxc_execute_main"))) main(int argc, char *argv[]);
+int lxc_execute_main(int argc, char *argv[])
 {
 	struct lxc_container *c;
 	struct lxc_log log;
@@ -162,40 +157,41 @@ int main(int argc, char *argv[])
 
 	c = lxc_container_new(my_args.name, my_args.lxcpath[0]);
 	if (!c) {
-		fprintf(stderr, "Failed to create lxc_container\n");
+		ERROR("Failed to create lxc_container");
 		exit(err);
 	}
 
 	if (my_args.rcfile) {
 		c->clear_config(c);
+
 		if (!c->load_config(c, my_args.rcfile)) {
-			fprintf(stderr, "Failed to load rcfile\n");
+			ERROR("Failed to load rcfile");
 			goto out;
 		}
+
 		c->configfile = strdup(my_args.rcfile);
 		if (!c->configfile) {
-			fprintf(stderr, "Out of memory setting new config filename\n");
+			ERROR("Out of memory setting new config filename");
 			goto out;
 		}
 	}
 
 	if (!c->lxc_conf) {
-		fprintf(stderr, "Executing a container with no configuration file may crash the host\n");
+		ERROR("Executing a container with no configuration file may crash the host");
 		goto out;
 	}
 
-	if (my_args.argc == 0) {
+	if (my_args.argc == 0)
 		if (!set_argv(c, &my_args)) {
-			fprintf(stderr, "missing command to execute!\n");
+			ERROR("Missing command to execute!");
 			goto out;
 		}
-	}
 
 	bret = lxc_config_define_load(&defines, c);
 	if (!bret)
 		goto out;
 
-	if (my_args.uid) {
+	if (my_args.uid != LXC_INVALID_UID) {
 		char buf[256];
 
 		ret = snprintf(buf, 256, "%d", my_args.uid);
@@ -207,7 +203,7 @@ int main(int argc, char *argv[])
 			goto out;
 	}
 
-	if (my_args.gid) {
+	if (my_args.gid != LXC_INVALID_GID) {
 		char buf[256];
 
 		ret = snprintf(buf, 256, "%d", my_args.gid);
@@ -223,22 +219,22 @@ int main(int argc, char *argv[])
 		goto out;
 
 	c->daemonize = my_args.daemonize == 1;
+
 	bret = c->start(c, 1, my_args.argv);
 	if (!bret) {
-		fprintf(stderr, "Failed run an application inside container\n");
+		ERROR("Failed run an application inside container");
 		goto out;
 	}
+
 	if (c->daemonize) {
 		err = EXIT_SUCCESS;
 	} else {
-		if (WIFEXITED(c->error_num)) {
+		if (WIFEXITED(c->error_num))
 			err = WEXITSTATUS(c->error_num);
-		} else {
+		else
 			/* Try to die with the same signal the task did. */
 			kill(0, WTERMSIG(c->error_num));
-		}
 	}
-
 
 out:
 	lxc_container_put(c);

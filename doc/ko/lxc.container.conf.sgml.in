@@ -1,30 +1,4 @@
-<!--
-
-lxc: linux Container library
-
-(C) Copyright IBM Corp. 2007, 2008
-
-Authors:
-Daniel Lezcano <daniel.lezcano at free.fr>
-
-This library is free software; you can redistribute it and/or
-modify it under the terms of the GNU Lesser General Public
-License as published by the Free Software Foundation; either
-version 2.1 of the License, or (at your option) any later version.
-
-This library is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public
-License along with this library; if not, write to the Free Software
-Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
-
-Translated into Korean
-by Sungbae Yoo <sungbae.yoo at samsung.com>
-
--->
+<!-- SPDX-License-Identifier: LGPL-2.1+ -->
 
 <!DOCTYPE refentry PUBLIC @docdtd@ [
 
@@ -348,7 +322,7 @@ by Sungbae Yoo <sungbae.yoo at samsung.com>
           <listitem>
             <para>
               <!--
-              UID to use within a private user namesapce for init.
+              UID to use within a private user namespace for init.
                 -->
               init이 사용자 네임스페이스 안에서 사용할 UID.
             </para>
@@ -361,7 +335,7 @@ by Sungbae Yoo <sungbae.yoo at samsung.com>
           <listitem>
             <para>
               <!--
-              GID to use within a private user namesapce for init.
+              GID to use within a private user namespace for init.
                 -->
               init이 사용자 네임스페이스 안에서 사용할 GID.
             </para>
@@ -445,19 +419,6 @@ by Sungbae Yoo <sungbae.yoo at samsung.com>
               컨테이너가 어떤 종류의 네트워크 가상화를 사용할지 지정한다.
               <option>lxc.net.[i].type</option> 필드부터 새로운 네트워크 설정이 시작된다. 이 방법으로 여러개의 네트워크 가상화 형태를 같은 컨테이너에 지정할 수 있다. 그리고 여러개의 네트워크 인터페이스를 하나의 컨테이너에 지정할 수도 있다.
               지정 가능한 형태는 아래와 같다.
-	    </para>
-
-	    <para>
-              <!--
-	      <option>none:</option> will cause the container to share
-	      the host's network namespace.  This means the host
-	      network devices are usable in the container.  It also
-	      means that if both the container and host have upstart as
-	      init, 'halt' in a container (for instance) will shut down the
-	      host.
-              -->
-              <option>none:</option> 호스트의 네트워크 네임스페이스를 공유한다. 이렇게 하면 호스트의 네트워크 장치를 컨테이너 내에서 사용가능하다.
-              컨테이너와 호스트 둘다 init에서 upstart를 사용하는 경우, (예를 들어) 컨테이너에서 'halt'를 하면, 호스트의 것도 종료된다.
 	    </para>
 
 	    <para>
@@ -844,7 +805,7 @@ by Sungbae Yoo <sungbae.yoo at samsung.com>
               <!--
 	      If set, the container will have a new pseudo tty
 	      instance, making this private to it. The value specifies
-              the maximum number of pseudo ttys allowed for a pts
+              the maximum number of pseudo ttys allowed for a pty
               instance (this limitation is not implemented yet).
               -->
               만약 지정되었다면, 컨테이너는 새 pseudo tty 인스턴스를 갖는다. 그리고 이것을 자기자신 전용으로 만든다. 지정하는 값은 pseudo tty의 최대 개수를 지정한다. (이 제한은 아직 구현되지 않았다)
@@ -1060,7 +1021,7 @@ by Sungbae Yoo <sungbae.yoo at samsung.com>
         the container at some <filename>path</filename>, and then mounts
         under <filename>path</filename>, then a TOCTTOU attack would be
         possible where the container user modifies a symbolic link under
-        his home directory at just the right time.
+        their home directory at just the right time.
         -->
         주의 - 보통 LXC는 마운트 대상과 상대 경로로 된 바인드 마운트 소스들이 컨테이너의 루트 아래에 있도록 보장할 것이다. 이는 호스트 디렉토리와 파일들을 겹쳐서 마운트하는 유형의 공격을 피하기 위한 것이다. (절대 경로로 된 마운트 소스 내에 존재하는 심볼릭 링크들은 무시될 것이다.)
         하지만, 만약 컨테이너 설정에서 컨테이너 사용자가 제어할 수 있는, 예를 들어 /home/joe와 같은 디렉토리를 컨테이너 내의 <filename>path</filename>에 먼저 마운트 하고 나서,  <filename>path</filename> 내에 또 마운트를 하는 경우가 있다면,
@@ -1623,7 +1584,7 @@ proc proc proc nodev,noexec,nosuid 0 0
 	container should be run can be specified in the container
         configuration.  The default is <command>lxc-container-default-cgns</command>
 	if the host kernel is cgroup namespace aware, or
-	<command>lxc-container-default</command> othewise.
+	<command>lxc-container-default</command> otherwise.
         -->
         lxc가 apparmor를 지원하도록 컴파일된 후 설치되었고, 호스트 시스템에서 apparmor가 활성화되었다면, 컨테이너에서 따라야할 apparmor 프로파일을 컨테이너 설정에서 지정할 수 있다. 기본값은 호스트 커널이 cgroup 네임스페이스를 지원하면 <command>lxc-container-default-cgns</command>이고, 그렇지 않다면 <command>lxc-container-default</command>이다.
       </para>
@@ -1736,17 +1697,17 @@ proc proc proc nodev,noexec,nosuid 0 0
       <para>
         <!--
         Versions 1 and 2 are currently supported.  In version 1, the
-	policy is a simple whitelist.  The second line therefore must
-	read "whitelist", with the rest of the file containing one (numeric)
-	sycall number per line.  Each syscall number is whitelisted,
-	while every unlisted number is blacklisted for use in the container
+	policy is a simple allowlist.  The second line therefore must
+	read "allowlist", with the rest of the file containing one (numeric)
+	syscall number per line.  Each syscall number is allowlisted,
+	while every unlisted number is denylisted for use in the container
         -->
-        현재는 버전1과 2만 지원된다. 버전 1에서는 정책은 단순한 화이트리스트이다. 그러므로 두번째 라인은 반드시 "whitelist"여야 한다. 파일의 나머지 내용은 한 줄에 하나의 시스템콜 번호로 채워진다. 화이트리스트에 없는 번호는 컨테이너에서 블랙리스트로 들어간다.
+        현재는 버전1과 2만 지원된다. 버전 1에서는 정책은 단순한 화이트리스트이다. 그러므로 두번째 라인은 반드시 "allowlist"여야 한다. 파일의 나머지 내용은 한 줄에 하나의 시스템콜 번호로 채워진다. 화이트리스트에 없는 번호는 컨테이너에서 블랙리스트로 들어간다.
       </para>
 
       <para>
         <!--
-       In version 2, the policy may be blacklist or whitelist,
+       In version 2, the policy may be denylist or allowlist,
        supports per-rule and per-policy default actions, and supports
        per-architecture system call resolution from textual names.
           -->
@@ -1754,7 +1715,7 @@ proc proc proc nodev,noexec,nosuid 0 0
       </para>
       <para>
         <!--
-       An example blacklist policy, in which all system calls are
+       An example denylist policy, in which all system calls are
        allowed except for mknod, which will simply do nothing and
        return 0 (success), looks like:
        -->
@@ -1762,7 +1723,7 @@ proc proc proc nodev,noexec,nosuid 0 0
       </para>
 <screen>
 2
-blacklist
+denylist
 mknod errno 0
 </screen>
       <variablelist>
@@ -2613,7 +2574,7 @@ mknod errno 0
 	lxc.net.1.ipv6.address = 2003:db8:1:0:214:1234:fe0b:3596
 	lxc.net.2.type = phys
 	lxc.net.2.flags = up
-	lxc.net.2.link = dummy0
+	lxc.net.2.link = random0
 	lxc.net.2.hwaddr = 4a:49:43:49:79:ff
 	lxc.net.2.ipv4.address = 10.2.3.6/24
 	lxc.net.2.ipv6.address = 2003:db8:1:0:214:1234:fe0b:3297
@@ -2659,11 +2620,6 @@ mknod errno 0
   </refsect1>
 
   &seealso;
-
-  <refsect1>
-    <title><!-- Author -->저자</title>
-    <para>Daniel Lezcano <email>daniel.lezcano@free.fr</email></para>
-  </refsect1>
 
 </refentry>
 

@@ -1,27 +1,13 @@
-/*
- * lxc: linux Container library
- *
- * (C) Copyright IBM Corp. 2007, 2008
- *
- * Authors:
- * Daniel Lezcano <daniel.lezcano at free.fr>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
+
 #ifndef __LXC_STATE_H
 #define __LXC_STATE_H
+
+#include "config.h"
+
+#include "compiler.h"
+
+#define MAX_STATE_LENGTH (8 + 1)
 
 typedef enum {
 	STOPPED,
@@ -35,10 +21,17 @@ typedef enum {
 	MAX_STATE,
 } lxc_state_t;
 
-extern lxc_state_t lxc_getstate(const char *name, const char *lxcpath);
+enum {
+	REBOOT_NONE,
+	REBOOT_REQ,
+	REBOOT_INIT
+};
 
-extern lxc_state_t lxc_str2state(const char *state);
-extern const char *lxc_state2str(lxc_state_t state);
-extern int lxc_wait(const char *lxcname, const char *states, int timeout, const char *lxcpath);
+__hidden extern lxc_state_t lxc_getstate(const char *name, const char *lxcpath, int timeout);
 
-#endif
+__hidden extern lxc_state_t lxc_str2state(const char *state);
+__hidden extern const char *lxc_state2str(lxc_state_t state);
+__hidden extern int lxc_wait(const char *lxcname, const char *states, int timeout,
+			     const char *lxcpath);
+
+#endif /* __LXC_STATE_H */

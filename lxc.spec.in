@@ -1,24 +1,7 @@
 #
+# SPDX-License-Identifier: LGPL-2.1+
+#
 # lxc: linux Container library
-#
-# (C) Copyright IBM Corp. 2007, 2008
-#
-# Authors:
-# Daniel Lezcano <daniel.lezcano at free.fr>
-#
-# This library is free software; you can redistribute it and/or
-# modify it under the terms of the GNU Lesser General Public
-# License as published by the Free Software Foundation; either
-# version 2.1 of the License, or (at your option) any later version.
-#
-# This library is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public
-# License along with this library; if not, write to the Free Software
-# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 # Set with_systemd on distros that use it, so we can install the service
 # file, otherwise the sysvinit script will be installed
@@ -29,9 +12,9 @@
 # BuildRequires systemd-units on fedora and rhel
 %if 0%{?fedora} >= 14 || 0%{?rhel} >= 7
 BuildRequires: systemd-units
+%endif
 #
 # BuildRequires systemd on openSUSE and SUSE
-%endif
 %if 0%{?suse_version} >= 1210
 BuildRequires: systemd
 %endif
@@ -43,7 +26,7 @@ BuildRequires: systemd
 # Must use /var/run for runtime_path on older releases or dnsmasq in the
 # lxc-net script will not be able to write its pid in /run (selinux denial)
 %if 0%{?fedora} < 15 || 0%{?rhel} < 7
-%define _with_runtime_path --with-runtime-path=/var/run
+%define _with_runtime_path -Druntime-path=/var/run
 %endif
 
 # RPM needs alpha/beta/rc in Release: not Version: to ensure smooth
@@ -69,12 +52,13 @@ Requires: openssl rsync dnsmasq bridge-utils
 Requires: %{name}-libs = %{version}-%{release}
 Requires(pre): /usr/sbin/useradd
 Requires(postun): /usr/sbin/userdel
-%if 0%{?fedora} < 15 || 0%{?rhel} < 7
+%if 0%{?fedora} < 15 && 0%{?rhel} < 7
 Requires: libcgroup
 %endif
 # Note for Suse.  The "docbook2X" BuildRequires does properly
 # match docbook2x on Suse in a case insensitive manner
-BuildRequires: libcap libcap-devel docbook2X graphviz libxslt pkgconfig
+BuildRequires: libcap libcap-devel docbook2X graphviz libxslt pkgconfig dbus-devel
+BuildRequires: meson
 
 #
 # Additional packages for openSUSE and SUSE
@@ -89,6 +73,13 @@ BuildRequires:  libapparmor-devel linux-glibc-devel lsb-release docbook-utils
 %ifarch %ix86 x86_64
 BuildRequires:  libseccomp-devel
 %endif
+%endif
+
+#
+# Additional package for Tizen
+#
+%if %{defined tizen_version}
+BuildRequires:  pkgconfig(dlog)
 %endif
 
 %description
@@ -118,19 +109,19 @@ development of the Linux containers.
 %prep
 %setup -q -n %{name}-%{version}%{?beta_dot}
 %build
-PATH=$PATH:/usr/sbin:/sbin %configure $args \
+
+%meson \
 %if "x%{_unitdir}" != "x"
-  --with-systemdsystemunitdir=%{_unitdir} \
+  -Dsystemd-unitdir=%{_unitdir} \
 %endif
   %{?_with_runtime_path} \
-  --disable-rpath \
-  --with-init-script=%{init_script}
-make %{?_smp_mflags}
+  "-Dinit-script=['%{init_script}']"
+
+%meson_build
 
 %install
 rm -rf %{buildroot}
-make install DESTDIR=%{buildroot}
-find %{buildroot} -type f -name '*.la' -exec rm -f {} ';'
+%meson_install
 
 %clean
 rm -rf %{buildroot}
@@ -145,6 +136,11 @@ fi
 
 %post
 # This test should trigger a network configure on a new install.
+if [ ! -d @LXC_DISTRO_SYSCONF@ ]
+then
+	mkdir -p @LXC_DISTRO_SYSCONF@
+fi
+
 if [ ! -f @LXC_DISTRO_SYSCONF@/lxc-net ] || ! grep -q 'USE_LXC_BRIDGE=' @LXC_DISTRO_SYSCONF@/lxc-net
 then
 	# Grab a random 10net subnet.  Need to add test logic...
@@ -171,7 +167,7 @@ USE_LXC_BRIDGE="true"
 # If you have the dnsmasq daemon installed, you'll also have to update
 # /etc/dnsmasq.d/lxc and restart the system wide dnsmasq daemon.
 LXC_BRIDGE="lxcbr0"
-LXC_BRIDGE_MAC="00:16:3e:00:00:00"
+LXC_BRIDGE_MAC="10:66:6a:00:00:00"
 LXC_ADDR="$SUBNET.1"
 LXC_NETMASK="255.255.255.0"
 LXC_NETWORK="$SUBNET.0/24"
@@ -181,6 +177,10 @@ LXC_DHCP_MAX="253"
 # dnsmasq.  For instance, you can use 'dhcp-host=mail1,10.0.3.100' to have
 # container 'mail1' always get ip address 10.0.3.100.
 #LXC_DHCP_CONFILE=/etc/lxc/dnsmasq.conf
+
+# Whether to use nftables (if available) to configure required network rules.
+# Set to any value != "true" to force iptables backend instead.
+LXC_USE_NFT="true"
 
 # Uncomment the next line if you want lxcbr0's dnsmasq to resolve the .lxc
 # domain.  You can then add "server=/lxc/10.0.3.1' (or your actual $LXC_ADDR)
@@ -225,9 +225,9 @@ fi
 %{_mandir}/ko/man5/lxc*
 %{_mandir}/ko/man7/lxc*
 %endif
+%{_datadir}/bash-completion/completions
 %{_datadir}/doc/*
 %{_datadir}/lxc/*
-%{_sysconfdir}/bash_completion.d
 %config(noreplace) %{_sysconfdir}/lxc/*
 %config(noreplace) %{_sysconfdir}/sysconfig/*
 
@@ -235,6 +235,7 @@ fi
 %{_unitdir}/lxc-net.service
 %{_unitdir}/lxc.service
 %{_unitdir}/lxc@.service
+%{_unitdir}/lxc-monitord.service
 %else
 %{_sysconfdir}/rc.d/init.d/lxc
 %{_sysconfdir}/rc.d/init.d/lxc-net
@@ -244,6 +245,7 @@ fi
 %defattr(-,root,root)
 %{_sbindir}/*
 %{_libdir}/*.so.*
+%{_libdir}/*.a
 %{_libdir}/%{name}
 %{_localstatedir}/*
 %{_libexecdir}/%{name}/hooks/unmount-namespace
@@ -262,34 +264,6 @@ fi
 %{_libdir}/pkgconfig/*
 
 %changelog
-* Tue Oct 22 2013 Dwight Engen <dwight.engen@oracle.com> - 1.0.0-0.1.alpha2
-- fix some rpmlint warnings/errors
-- split lua bits into separate package
-
-* Mon Sep 10 2012 Dwight Engen <dwight.engen@oracle.com> - 0.8.0
-- fix lxc-init moved to libexec
-- .pc moved to _libdir
-- package template files /usr/share/lxc/templates
-
-* Thu Sep  8 2011 Greg Kurz <gkurz@fr.ibm.com> - 0.7.5.1
-- fix installed files for rpmbuild
-- introduce lxc-libs package
-
-* Fri Jul 23 2010 Daniel Lezcano <dlezcano@fr.ibm.com> - 0.7.2
-- set attribute for installed files
-- fix libraries installation
-
-* Tue Mar 24 2009 Daniel Lezcano <daniel.lezcano@free.fr> - 0.6.1
-- Removed capability setting, let the user to do that through "lxc-setcap"
-
-* Mon Feb 16 2009 Daniel Lezcano <daniel.lezcano@free.fr> - 0.6.0
-- Added more capabilities to the executables
-
-* Sun Jan 25 2009 Daniel Lezcano <daniel.lezcano@free.fr> - 0.6.0
-- Reduced spec file
-
-* Sun Aug 3 2008 Daniel Lezcano <dlezcano@fr.ibm.com> - 0.1.0
-- Initial RPM release.
 
 # Local variables:
 # mode: shell-script

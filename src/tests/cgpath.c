@@ -1,21 +1,11 @@
 /* liblxcapi
  *
- * Copyright © 2012 Serge Hallyn <serge.hallyn@ubuntu.com>.
- * Copyright © 2012 Canonical Ltd.
+ * SPDX-License-Identifier: GPL-2.0-only
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2, as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+#include "config.h"
+
 #include <lxc/lxccontainer.h>
 
 #include <limits.h>
@@ -30,8 +20,14 @@
 #include <sys/stat.h>
 
 #include "cgroup.h"
-#include "lxc.h"
 #include "commands.h"
+#include "lxc.h"
+#include "lxctest.h"
+#include "utils.h"
+
+#if !HAVE_STRLCPY
+#include "strlcpy.h"
+#endif
 
 #define MYNAME "lxctest1"
 
@@ -42,19 +38,37 @@
 /*
  * test_running_container: test cgroup functions against a running container
  *
- * @group : name of the container group or NULL for default "lxc"
  * @name  : name of the container
  */
-static int test_running_container(const char *lxcpath,
-				  const char *group, const char *name)
+static int test_running_container(const char *lxcpath, const char *name)
 {
+	__do_close int fd_log = -EBADF;
 	int ret = -1;
 	struct lxc_container *c = NULL;
+	struct lxc_log log = {};
+	char template[sizeof(P_tmpdir"/attach_XXXXXX")];
 	char *cgrelpath;
 	char  relpath[PATH_MAX+1];
 	char  value[NAME_MAX], value_save[NAME_MAX];
+	call_cleaner(cgroup_exit) struct cgroup_ops *cgroup_ops = NULL;
 
-	sprintf(relpath, "%s/%s", group ? group : "lxc", name);
+	(void)strlcpy(template, P_tmpdir"/attach_XXXXXX", sizeof(template));
+
+	fd_log = lxc_make_tmpfile(template, false);
+	if (fd_log < 0) {
+		lxc_error("Failed to create temporary log file for container %s\n", name);
+		exit(EXIT_FAILURE);
+	}
+	log.name = name;
+	log.file = template;
+	log.level = "TRACE";
+	log.prefix = "cgpath";
+	log.quiet = false;
+	log.lxcpath = NULL;
+	if (lxc_log_init(&log))
+		goto err1;
+
+	sprintf(relpath, DEFAULT_PAYLOAD_CGROUP_PREFIX "%s", name);
 
 	if ((c = lxc_container_new(name, lxcpath)) == NULL) {
 		TSTERR("container %s couldn't instantiate", name);
@@ -75,36 +89,41 @@ static int test_running_container(const char *lxcpath,
 		goto err3;
 	}
 
-	/* test get/set value using memory.soft_limit_in_bytes file */
-	ret = lxc_cgroup_get("memory.soft_limit_in_bytes", value, sizeof(value),
-			     c->name, c->config_path);
-	if (ret < 0) {
-		TSTERR("lxc_cgroup_get failed");
+	cgroup_ops = cgroup_init(c->lxc_conf);
+	if (!cgroup_ops)
 		goto err3;
-	}
-	strcpy(value_save, value);
 
-	ret = lxc_cgroup_set("memory.soft_limit_in_bytes", "512M", c->name, c->config_path);
-	if (ret < 0) {
-		TSTERR("lxc_cgroup_set failed %d %d", ret, errno);
+	/* test get/set value using memory.soft_limit_in_bytes file */
+	ret = cgroup_ops->get(cgroup_ops, "pids.max", value, sizeof(value),
+			      c->name, c->config_path);
+        if (ret < 0) {
+		TSTERR("cgroup_get failed");
 		goto err3;
 	}
-	ret = lxc_cgroup_get("memory.soft_limit_in_bytes", value, sizeof(value),
-			     c->name, c->config_path);
+	(void)strlcpy(value_save, value, NAME_MAX);
+
+	ret = cgroup_ops->set(cgroup_ops, "pids.max", "10000",
+			      c->name, c->config_path);
 	if (ret < 0) {
-		TSTERR("lxc_cgroup_get failed");
+		TSTERR("cgroup_set failed %d %d", ret, errno);
 		goto err3;
 	}
-	if (strcmp(value, "536870912\n")) {
-		TSTERR("lxc_cgroup_set_bypath failed to set value >%s<", value);
+	ret = cgroup_ops->get(cgroup_ops, "pids.max", value,
+			      sizeof(value), c->name, c->config_path);
+	if (ret < 0) {
+		TSTERR("cgroup_get failed");
+		goto err3;
+	}
+	if (strcmp(value, "10000\n")) {
+		TSTERR("cgroup_set_bypath failed to set value >%s<", value);
 		goto err3;
 	}
 
 	/* restore original value */
-	ret = lxc_cgroup_set("memory.soft_limit_in_bytes", value_save,
-			     c->name, c->config_path);
+	ret = cgroup_ops->set(cgroup_ops, "pids.max",
+			      value_save, c->name, c->config_path);
 	if (ret < 0) {
-		TSTERR("lxc_cgroup_set failed");
+		TSTERR("cgroup_set failed");
 		goto err3;
 	}
 
@@ -115,11 +134,21 @@ err3:
 err2:
 	lxc_container_put(c);
 err1:
+
+	if (ret != 0) {
+		char buf[4096];
+		ssize_t buflen;
+		while ((buflen = read(fd_log, buf, 1024)) > 0) {
+			buflen = write(STDERR_FILENO, buf, buflen);
+			if (buflen <= 0)
+				break;
+		}
+	}
+	(void)unlink(template);
 	return ret;
 }
 
-static int test_container(const char *lxcpath,
-			  const char *group, const char *name,
+static int test_container(const char *lxcpath, const char *name,
 			  const char *template)
 {
 	int ret;
@@ -141,6 +170,7 @@ static int test_container(const char *lxcpath,
 	if (c->is_defined(c)) {
 		c->stop(c);
 		c->destroy(c);
+		lxc_container_put(c);
 		c = lxc_container_new(name, lxcpath);
 	}
 	c->set_config_item(c, "lxc.net.0.type", "empty");
@@ -155,7 +185,7 @@ static int test_container(const char *lxcpath,
 		goto out3;
 	}
 
-	ret = test_running_container(lxcpath, group, name);
+	ret = test_running_container(lxcpath, name);
 
 	c->stop(c);
 out3:
@@ -166,7 +196,7 @@ out1:
 	return ret;
 }
 
-int main()
+int main(int argc, char *argv[])
 {
 	int ret = EXIT_FAILURE;
 
@@ -174,7 +204,7 @@ int main()
 	 * pam_cgroup */
 	if (geteuid() != 0) {
 		TSTERR("requires privilege");
-		exit(0);
+		exit(EXIT_SUCCESS);
 	}
 
 	#if TEST_ALREADY_RUNNING_CT
@@ -185,17 +215,17 @@ int main()
 	 * the container ourselves because valgrind gets confused by lxc's
 	 * internal calls to clone.
 	 */
-	if (test_running_container(NULL, NULL, "bb01") < 0)
+	if (test_running_container(NULL, "bb01") < 0)
 		goto out;
 	printf("Running container cgroup tests...Passed\n");
 
 	#else
 
-	if (test_container(NULL, NULL, MYNAME, "busybox") < 0)
+	if (test_container(NULL, MYNAME, "busybox") < 0)
 		goto out;
 	printf("Container creation tests...Passed\n");
 
-	if (test_container("/var/lib/lxctest2", NULL, MYNAME, "busybox") < 0)
+	if (test_container("/var/lib/lxctest2", MYNAME, "busybox") < 0)
 		goto out;
 	printf("Container creation with LXCPATH tests...Passed\n");
 

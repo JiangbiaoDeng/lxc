@@ -1,19 +1,5 @@
 /*
- * Copyright © 2015 Wolfgang Bumiller <w.bumiller@proxmox.com>.
- * Copyright © 2015 Proxmox Server Solutions GmbH
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2, as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * SPDX-License-Identifier: LGPL-2.1+
  *
  * --
  *
@@ -25,7 +11,8 @@
  * namespaces are gone.
  */
 
-#define _GNU_SOURCE    /* setns */
+#include "config.h"
+
 #include <stdio.h>     /* fdopen, getmntent, endmntent */
 #include <stdlib.h>    /* malloc, qsort */
 #include <unistd.h>    /* close */
@@ -36,21 +23,14 @@
 #include <sys/stat.h>  /* openat, open */
 #include <fcntl.h>     /* openat, open */
 #include <errno.h>     /* errno */
-
-#include <../src/config.h>
-
-#if IS_BIONIC
-#include <../src/include/lxcmntent.h>
-#else
 #include <mntent.h>
-#endif
 
 #ifndef O_PATH
-#define O_PATH      010000000
+#define O_PATH 010000000
 #endif
 
 /* Define setns() if missing from the C library */
-#ifndef HAVE_SETNS
+#if !HAVE_SETNS
 static inline int setns(int fd, int nstype)
 {
 #ifdef __NR_setns
@@ -111,13 +91,13 @@ static int read_mounts(int procfd, struct mount **mp, size_t *countp) {
 	*mp = NULL;
 	*countp = 0;
 
-	fd = openat(procfd, "self/mounts", O_RDONLY);
+	fd = openat(procfd, "self/mounts", O_RDONLY | O_CLOEXEC);
 	if (fd < 0) {
 		free(mounts);
 		return 0;
 	}
 
-	mf = fdopen(fd, "r");
+	mf = fdopen(fd, "re");
 	if (!mf) {
 		int error = errno;
 		close(fd);
@@ -189,14 +169,14 @@ int main(int argc, char **argv) {
 	/* Open a handle to /proc on the host as we need to access /proc/self/mounts
 	 * and the container's /proc doesn't contain our /self. See read_mounts().
 	 */
-	procfd = open("/proc", O_RDONLY | O_DIRECTORY | O_PATH);
+	procfd = open("/proc", O_RDONLY | O_DIRECTORY | O_PATH | O_CLOEXEC);
 	if (procfd < 0) {
 		fprintf(stderr, "%s: failed to open /proc: %s\n", argv[0], strerror(errno));
 		return 4;
 	}
 
 	/* Open the mount namespace and enter it. */
-	ctmntfd = open(mntns, O_RDONLY);
+	ctmntfd = open(mntns, O_RDONLY | O_CLOEXEC);
 	if (ctmntfd < 0) {
 		fprintf(stderr, "%s: failed to open mount namespace: %s\n",
 			argv[0], strerror(errno));

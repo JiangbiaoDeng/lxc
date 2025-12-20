@@ -1,27 +1,4 @@
-<!--
-
-lxc: linux Container library
-
-(C) Copyright Canonical Inc. 2007, 2008
-
-Authors:
-Christian Brauner <christian.brauner at mailbox.org>
-
-This library is free software; you can redistribute it and/or
-modify it under the terms of the GNU Lesser General Public
-License as published by the Free Software Foundation; either
-version 2.1 of the License, or (at your option) any later version.
-
-This library is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public
-License along with this library; if not, write to the Free Software
-Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
-
--->
+<!-- SPDX-License-Identifier: LGPL-2.1+ -->
 
 <!DOCTYPE refentry PUBLIC @docdtd@ [
 
@@ -55,6 +32,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
       <arg choice="opt">-p, --newpath <replaceable>newpath</replaceable></arg>
       <arg choice="opt">-B, --backingstorage <replaceable>backingstorage</replaceable></arg>
       <arg choice="opt">-s, --snapshot</arg>
+      <arg choice="opt">-a, --allowrunning</arg>
       <arg choice="opt">-K, --keepname</arg>
       <arg choice="opt">-D, --keepdata</arg>
       <arg choice="opt">-M, --keepmac</arg>
@@ -70,6 +48,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
       <arg choice="req">-e, --ephemeral</arg>
       <arg choice="opt">-B, --backingstorage <replaceable>backingstorage</replaceable></arg>
       <arg choice="opt">-s, --snapshot</arg>
+      <arg choice="opt">-a, --allowrunning</arg>
       <arg choice="opt">-K, --keepname</arg>
       <arg choice="opt">-D, --keepdata</arg>
       <arg choice="opt">-M, --keepmac</arg>
@@ -209,6 +188,15 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 	  </varlistentry>
 
 	  <varlistentry>
+	    <term> <option>-a,--allowrunning </option> </term>
+	   <listitem>
+	    <para> Allow the creation of a Snapshot of an already running container.
+	    This may cause data corruption or data loss depending on the used
+	    filesystem and applications. Use with care. </para>
+	   </listitem>
+	  </varlistentry>
+
+	  <varlistentry>
 	    <term> <option>-F,--foreground</option> </term>
 	   <listitem>
             <para>Run the snapshot in the foreground. The snapshots console will
@@ -319,11 +307,6 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
   &commonoptions;
 
   &seealso;
-
-  <refsect1>
-    <title>Author</title>
-    <para>Christian Brauner <email>christian.brauner@mailbox.org</email></para>
-  </refsect1>
 
 </refentry>
 

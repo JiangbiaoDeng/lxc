@@ -1,4 +1,7 @@
 #!/bin/bash
+#
+# SPDX-License-Identifier: LGPL-2.1+
+#
 # dhclient-script for Linux. Dan Halbert, March, 1997.
 # Updated for Linux 2.[12] by Brian J. Murrell, January 1999.
 # No guarantees about this. I'm a novice at the details of Linux
@@ -32,7 +35,7 @@
 # Resolve every paths against the $ROOTFS environment variable.
 
 # 'ip' just looks too weird. Also, we now have unit-tests! Those unit-tests
-# overwirte this line to use a fake ip-echo tool. It's also convenient
+# override this line to use a fake ip-echo tool. It's also convenient
 # if your system holds ip tool in a non-standard location.
 ip=/sbin/ip
 

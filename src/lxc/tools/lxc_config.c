@@ -1,27 +1,11 @@
-/* lxc_config
- *
- * Copyright © 2012 Serge Hallyn <serge.hallyn@ubuntu.com>.
- * Copyright © 2012 Canonical Ltd.
- *
- *  This library is free software; you can redistribute it and/or
- *  modify it under the terms of the GNU Lesser General Public
- *  License as published by the Free Software Foundation; either
- *  version 2.1 of the License, or (at your option) any later version.
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
- *  This library is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- *  Lesser General Public License for more details.
-
- *  You should have received a copy of the GNU Lesser General Public
- *  License along with this library; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
- */
+#include "config.h"
 
 #include <stdio.h>
 #include <string.h>
 
-#include <lxc/lxccontainer.h>
+#include "lxc.h"
 
 struct lxc_config_items {
 	char *name;
@@ -52,29 +36,35 @@ static void list_config_items(void)
 
 	for (i = &items[0]; i->name; i++)
 		printf("%s\n", i->name);
+
 	exit(EXIT_SUCCESS);
 }
 
-int main(int argc, char *argv[])
+int __attribute__((weak, alias("lxc_config_main"))) main(int argc, char *argv[]);
+int lxc_config_main(int argc, char *argv[])
 {
 	struct lxc_config_items *i;
 	const char *value;
 
-	if (argc < 2 || strcmp(argv[1], "-h") == 0 ||
-			strcmp(argv[1], "--help") == 0)
+	if (argc < 2 || strncmp(argv[1], "-h", strlen(argv[1])) == 0 ||
+	                strncmp(argv[1], "--help", strlen(argv[1])) == 0)
 		usage(argv[0]);
-	if (strcmp(argv[1], "-l") == 0)
+
+	if (strncmp(argv[1], "-l", strlen(argv[1])) == 0)
 		list_config_items();
+
 	for (i = &items[0]; i->name; i++) {
-		if (strcmp(argv[1], i->name) == 0) {
+		if (strncmp(argv[1], i->name, strlen(argv[1])) == 0) {
 			value = lxc_get_global_config_item(i->name);
 			if (value)
 				printf("%s\n", value);
 			else
 				printf("%s is not set.\n", argv[1]);
+
 			exit(EXIT_SUCCESS);
 		}
 	}
+
 	printf("Unknown configuration item: %s\n", argv[1]);
 	exit(EXIT_FAILURE);
 }

@@ -1,54 +1,68 @@
-/*
- * lxc: linux Container library
- *
- * (C) Copyright IBM Corp. 2007, 2008
- *
- * Authors:
- * Daniel Lezcano <daniel.lezcano at free.fr>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
 #ifndef __LXC_MAINLOOP_H
 #define __LXC_MAINLOOP_H
 
+#include "config.h"
+
 #include <stdint.h>
-#include "list.h"
+
+#include "compiler.h"
+#include "hlist.h"
+#include "memory_utils.h"
 
 #define LXC_MAINLOOP_ERROR -1
 #define LXC_MAINLOOP_CONTINUE 0
 #define LXC_MAINLOOP_CLOSE 1
+#define LXC_MAINLOOP_DISARM 2
 
-struct lxc_epoll_descr {
-	int epfd;
-	struct lxc_list handlers;
+typedef enum {
+	LXC_MAINLOOP_EPOLL	= 1,
+	LXC_MAINLOOP_IO_URING	= 2,
+} async_descr_t;
+
+struct lxc_async_descr {
+	async_descr_t type;
+	union {
+		int epfd;
+#if HAVE_LIBURING
+		struct io_uring *ring;
+#endif
+	};
+	struct list_head handlers;
 };
 
+static inline int default_cleanup_handler(int fd, void *data)
+{
+	return 0;
+}
+
 typedef int (*lxc_mainloop_callback_t)(int fd, uint32_t event, void *data,
-				       struct lxc_epoll_descr *descr);
+				       struct lxc_async_descr *descr);
 
-extern int lxc_mainloop(struct lxc_epoll_descr *descr, int timeout_ms);
+typedef int (*lxc_mainloop_cleanup_t)(int fd, void *data);
 
-extern int lxc_mainloop_add_handler(struct lxc_epoll_descr *descr, int fd,
-				    lxc_mainloop_callback_t callback,
-				    void *data);
+__hidden extern int lxc_mainloop(struct lxc_async_descr *descr, int timeout_ms);
 
-extern int lxc_mainloop_del_handler(struct lxc_epoll_descr *descr, int fd);
+__hidden extern int lxc_mainloop_add_handler_events(struct lxc_async_descr *descr, int fd, int events,
+						    lxc_mainloop_callback_t callback,
+						    lxc_mainloop_cleanup_t cleanup,
+						    void *data, const char *name);
+__hidden extern int lxc_mainloop_add_handler(struct lxc_async_descr *descr, int fd,
+					     lxc_mainloop_callback_t callback,
+					     lxc_mainloop_cleanup_t cleanup,
+					     void *data, const char *name);
+__hidden extern int lxc_mainloop_add_oneshot_handler(struct lxc_async_descr *descr, int fd,
+						     lxc_mainloop_callback_t callback,
+						     lxc_mainloop_cleanup_t cleanup,
+						     void *data, const char *name);
 
-extern int lxc_mainloop_open(struct lxc_epoll_descr *descr);
+__hidden extern int lxc_mainloop_del_handler(struct lxc_async_descr *descr, int fd);
 
-extern int lxc_mainloop_close(struct lxc_epoll_descr *descr);
+__hidden extern int lxc_mainloop_open(struct lxc_async_descr *descr);
+
+__hidden extern void lxc_mainloop_close(struct lxc_async_descr *descr);
+
+define_cleanup_function(struct lxc_async_descr *, lxc_mainloop_close);
 
 #endif

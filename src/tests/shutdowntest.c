@@ -1,22 +1,11 @@
-
 /* liblxcapi
  *
- * Copyright © 2012 Serge Hallyn <serge.hallyn@ubuntu.com>.
- * Copyright © 2012 Canonical Ltd.
+ * SPDX-License-Identifier: GPL-2.0-only
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2, as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+#include "config.h"
+
 #include <lxc/lxccontainer.h>
 
 #include <unistd.h>
@@ -49,8 +38,10 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "%d: failed to set network type\n", __LINE__);
 		goto out;
 	}
+
 	c->set_config_item(c, "lxc.net.0.link", "lxcbr0");
 	c->set_config_item(c, "lxc.net.0.flags", "up");
+
 	if (!c->createl(c, "busybox", NULL, NULL, 0, NULL)) {
 		fprintf(stderr, "%d: failed to create a container\n", __LINE__);
 		goto out;
@@ -64,6 +55,7 @@ int main(int argc, char *argv[])
 	c->clear_config(c);
 	c->load_config(c, NULL);
 	c->want_daemonize(c, true);
+
 	if (!c->startl(c, 0, NULL)) {
 		fprintf(stderr, "%d: failed to start %s\n", __LINE__, MYNAME);
 		goto out;
@@ -74,9 +66,9 @@ int main(int argc, char *argv[])
 
 	if (!c->shutdown(c, 120)) {
 		fprintf(stderr, "%d: failed to shut down %s\n", __LINE__, MYNAME);
-		if (!c->stop(c)) {
+		if (!c->stop(c))
 			fprintf(stderr, "%d: failed to kill %s\n", __LINE__, MYNAME);
-		}
+
 		goto out;
 	}
 
@@ -92,10 +84,10 @@ int main(int argc, char *argv[])
 
 	fprintf(stderr, "all lxc_container tests passed for %s\n", c->name);
 	ret = 0;
+
 out:
-	if (c && c->is_defined(c)) {
+	if (c && c->is_defined(c))
 		c->destroy(c);
-	}
 
 	lxc_container_put(c);
 	exit(ret);

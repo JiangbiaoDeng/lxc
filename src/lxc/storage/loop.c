@@ -1,28 +1,7 @@
-/*
- * lxc: linux Container library
- *
- * (C) Copyright IBM Corp. 2007, 2008
- *
- * Authors:
- * Daniel Lezcano <daniel.lezcano at free.fr>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
-#define _GNU_SOURCE
-#define __STDC_FORMAT_MACROS
+#include "config.h"
+
 #include <dirent.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -30,12 +9,13 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include "log.h"
 #include "loop.h"
+#include "memory_utils.h"
 #include "storage.h"
 #include "storage_utils.h"
 #include "utils.h"
@@ -53,9 +33,9 @@ int loop_clonepaths(struct lxc_storage *orig, struct lxc_storage *new,
 		    const char *lxcpath, int snap, uint64_t newsize,
 		    struct lxc_conf *conf)
 {
+	__do_free char *srcdev = NULL;
 	uint64_t size = newsize;
 	int len, ret;
-	char *srcdev;
 	char fstype[100] = "ext4";
 
 	if (snap) {
@@ -67,7 +47,7 @@ int loop_clonepaths(struct lxc_storage *orig, struct lxc_storage *new,
 		return -1;
 
 	len = strlen(lxcpath) + strlen(cname) + strlen("rootdev") + 3;
-	srcdev = alloca(len);
+	srcdev = must_realloc(NULL, len);
 	ret = snprintf(srcdev, len, "%s/%s/rootdev", lxcpath, cname);
 	if (ret < 0 || ret >= len) {
 		ERROR("Failed to create string");
@@ -131,12 +111,12 @@ int loop_clonepaths(struct lxc_storage *orig, struct lxc_storage *new,
 }
 
 int loop_create(struct lxc_storage *bdev, const char *dest, const char *n,
-		struct bdev_specs *specs)
+		struct bdev_specs *specs, const struct lxc_conf *conf)
 {
+	__do_free char *srcdev = NULL;
 	const char *fstype;
 	uint64_t sz;
 	int ret, len;
-	char *srcdev;
 
 	if (!specs)
 		return -1;
@@ -145,7 +125,7 @@ int loop_create(struct lxc_storage *bdev, const char *dest, const char *n,
 	 * be <lxcpath>/<lxcname>/rootdev, and <src> will be "loop:<srcdev>".
 	 */
 	len = strlen(dest) + 2;
-	srcdev = alloca(len);
+	srcdev = must_realloc(NULL, len);
 
 	ret = snprintf(srcdev, len, "%s", dest);
 	if (ret < 0 || ret >= len) {
@@ -185,7 +165,7 @@ int loop_create(struct lxc_storage *bdev, const char *dest, const char *n,
 		return -1;
 	}
 
-	ret = mkdir_p(bdev->dest, 0755);
+	ret = lxc_mkdir_p(bdev->dest, 0755);
 	if (ret < 0) {
 		ERROR("Failed creating directory \"%s\"", bdev->dest);
 		return -1;
@@ -234,7 +214,7 @@ bool loop_detect(const char *path)
 int loop_mount(struct lxc_storage *bdev)
 {
 	int ret, loopfd;
-	char loname[MAXPATHLEN];
+	char loname[PATH_MAX];
 	const char *src;
 
 	if (strcmp(bdev->type, "loop"))
@@ -297,7 +277,8 @@ int loop_umount(struct lxc_storage *bdev)
 static int do_loop_create(const char *path, uint64_t size, const char *fstype)
 {
 	int fd, ret;
-	char cmd_output[MAXPATHLEN];
+	off_t ret_size;
+	char cmd_output[PATH_MAX];
 	const char *cmd_args[2] = {fstype, path};
 
 	/* create the new loopback file */
@@ -307,8 +288,8 @@ static int do_loop_create(const char *path, uint64_t size, const char *fstype)
 		return -1;
 	}
 
-	ret = lseek(fd, size, SEEK_SET);
-	if (ret < 0) {
+	ret_size = lseek(fd, size, SEEK_SET);
+	if (ret_size < 0) {
 		SYSERROR("Failed to seek to set new loop file size for loop "
 			 "file \"%s\"", path);
 		close(fd);

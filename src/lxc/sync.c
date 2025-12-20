@@ -1,149 +1,153 @@
-/*
- * lxc: linux Container library
- *
- * (C) Copyright IBM Corp. 2007, 2008
- *
- * Authors:
- * Daniel Lezcano <daniel.lezcano at free.fr>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include "config.h"
+
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
 
-#include "sync.h"
 #include "log.h"
 #include "start.h"
+#include "sync.h"
+#include "utils.h"
 
-lxc_log_define(lxc_sync, lxc);
+lxc_log_define(sync, lxc);
 
-static int __sync_wait(int fd, int sequence)
+bool sync_wait(int fd, int sequence)
 {
 	int sync = -1;
 	ssize_t ret;
 
-	ret = read(fd, &sync, sizeof(sync));
-	if (ret < 0) {
-		ERROR("sync wait failure : %s", strerror(errno));
-		return -1;
-	}
+	ret = lxc_read_nointr(fd, &sync, sizeof(sync));
+	if (ret < 0)
+		return log_error_errno(false, errno, "Sync wait failure");
 
 	if (!ret)
-		return 0;
+		return true;
 
-	if ((size_t)ret != sizeof(sync)) {
-		ERROR("unexpected sync size: %zu expected %zu", (size_t)ret, sizeof(sync));
-		return -1;
-	}
+	if ((size_t)ret != sizeof(sync))
+		return log_error(false, "Unexpected sync size: %zu expected %zu", (size_t)ret, sizeof(sync));
 
-	if (sync == LXC_SYNC_ERROR) {
-		ERROR("An error occurred in another process "
-		      "(expected sequence number %d)", sequence);
-		return -1;
-	}
+	if (sync == SYNC_ERROR)
+		return log_error(false, "An error occurred in another process (expected sequence number %d)", sequence);
 
-	if (sync != sequence) {
-		ERROR("invalid sequence number %d. expected %d",
-		      sync, sequence);
-		return -1;
-	}
-	return 0;
+	if (sync != sequence)
+		return log_error(false, "Invalid sequence number %d. Expected sequence number %d", sync, sequence);
+
+	return true;
 }
 
-static int __sync_wake(int fd, int sequence)
+bool sync_wake(int fd, int sequence)
 {
 	int sync = sequence;
 
-	if (write(fd, &sync, sizeof(sync)) < 0) {
-		ERROR("sync wake failure : %s", strerror(errno));
-		return -1;
+	if (lxc_write_nointr(fd, &sync, sizeof(sync)) < 0)
+		return log_error_errno(false, errno, "Sync wake failure");
+
+	return true;
+}
+
+static bool __sync_barrier(int fd, int sequence)
+{
+	if (!sync_wake(fd, sequence))
+		return false;
+
+	return sync_wait(fd, sequence + 1);
+}
+
+static inline const char *start_sync_to_string(int state)
+{
+	switch (state) {
+	case START_SYNC_STARTUP:
+		return "startup";
+	case START_SYNC_CONFIGURE:
+		return "configure";
+	case START_SYNC_POST_CONFIGURE:
+		return "post-configure";
+	case START_SYNC_CGROUP_LIMITS:
+		return "cgroup-limits";
+	case START_SYNC_IDMAPPED_MOUNTS:
+		return "idmapped-mounts";
+	case START_SYNC_FDS:
+		return "fds";
+	case START_SYNC_READY_START:
+		return "ready-start";
+	case START_SYNC_RESTART:
+		return "restart";
+	case START_SYNC_POST_RESTART:
+		return "post-restart";
+	case SYNC_ERROR:
+		return "error";
+	default:
+		return "invalid sync state";
 	}
-	return 0;
 }
 
-static int __sync_barrier(int fd, int sequence)
+bool lxc_sync_barrier_parent(struct lxc_handler *handler, int sequence)
 {
-	if (__sync_wake(fd, sequence))
-		return -1;
-	return __sync_wait(fd, sequence+1);
-}
-
-int lxc_sync_barrier_parent(struct lxc_handler *handler, int sequence)
-{
+	TRACE("Child waking parent with sequence %s and waiting for sequence %s",
+	      start_sync_to_string(sequence), start_sync_to_string(sequence + 1));
 	return __sync_barrier(handler->sync_sock[0], sequence);
 }
 
-int lxc_sync_barrier_child(struct lxc_handler *handler, int sequence)
+bool lxc_sync_barrier_child(struct lxc_handler *handler, int sequence)
 {
+	TRACE("Parent waking child with sequence %s and waiting with sequence %s",
+	      start_sync_to_string(sequence), start_sync_to_string(sequence + 1));
 	return __sync_barrier(handler->sync_sock[1], sequence);
 }
 
-int lxc_sync_wake_parent(struct lxc_handler *handler, int sequence)
+bool lxc_sync_wake_parent(struct lxc_handler *handler, int sequence)
 {
-	return __sync_wake(handler->sync_sock[0], sequence);
+	TRACE("Child waking parent with sequence %s", start_sync_to_string(sequence));
+	return sync_wake(handler->sync_sock[0], sequence);
 }
 
-int lxc_sync_wait_parent(struct lxc_handler *handler, int sequence)
+bool lxc_sync_wait_parent(struct lxc_handler *handler, int sequence)
 {
-	return __sync_wait(handler->sync_sock[0], sequence);
+	TRACE("Child waiting for parent with sequence %s", start_sync_to_string(sequence));
+	return sync_wait(handler->sync_sock[0], sequence);
 }
 
-int lxc_sync_wait_child(struct lxc_handler *handler, int sequence)
+bool lxc_sync_wait_child(struct lxc_handler *handler, int sequence)
 {
-	return __sync_wait(handler->sync_sock[1], sequence);
+	TRACE("Parent waiting for child with sequence %s", start_sync_to_string(sequence));
+	return sync_wait(handler->sync_sock[1], sequence);
 }
 
-int lxc_sync_wake_child(struct lxc_handler *handler, int sequence)
+bool lxc_sync_wake_child(struct lxc_handler *handler, int sequence)
 {
-	return __sync_wake(handler->sync_sock[1], sequence);
+	TRACE("Parent waking child with sequence %s", start_sync_to_string(sequence));
+	return sync_wake(handler->sync_sock[1], sequence);
 }
 
-int lxc_sync_init(struct lxc_handler *handler)
+bool lxc_sync_init(struct lxc_handler *handler)
 {
 	int ret;
 
 	ret = socketpair(AF_LOCAL, SOCK_STREAM, 0, handler->sync_sock);
-	if (ret) {
-		SYSERROR("failed to create synchronization socketpair");
-		return -1;
-	}
+	if (ret)
+		return log_error_errno(false, errno, "failed to create synchronization socketpair");
 
 	/* Be sure we don't inherit this after the exec */
-	fcntl(handler->sync_sock[0], F_SETFD, FD_CLOEXEC);
+	ret = fcntl(handler->sync_sock[0], F_SETFD, FD_CLOEXEC);
+	if (ret < 0)
+		return log_error_errno(false, errno, "Failed to make socket close-on-exec");
 
-	return 0;
+	TRACE("Initialized synchronization infrastructure");
+	return true;
 }
 
 void lxc_sync_fini_child(struct lxc_handler *handler)
 {
-	if (handler->sync_sock[0] != -1) {
-		close(handler->sync_sock[0]);
-		handler->sync_sock[0] = -1;
-	}
+	close_prot_errno_disarm(handler->sync_sock[0]);
 }
 
 void lxc_sync_fini_parent(struct lxc_handler *handler)
 {
-	if (handler->sync_sock[1] != -1) {
-		close(handler->sync_sock[1]);
-		handler->sync_sock[1] = -1;
-	}
+	close_prot_errno_disarm(handler->sync_sock[1]);
 }
 
 void lxc_sync_fini(struct lxc_handler *handler)

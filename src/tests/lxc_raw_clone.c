@@ -1,28 +1,12 @@
 /*
  * lxc: linux Container library
  *
- * Copyright © 2017 Canonical Ltd.
+ * SPDX-License-Identifier: LGPL-2.1+
  *
- * Authors:
- * Christian Brauner <christian.brauner@ubuntu.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#define _GNU_SOURCE
-#define __STDC_FORMAT_MACROS
+#include "config.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -37,8 +21,10 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include "cgroups/cgroup_utils.h"
 #include "lxctest.h"
 #include "namespace.h"
+#include "process_utils.h"
 #include "utils.h"
 
 int main(int argc, char *argv[])
@@ -47,42 +33,42 @@ int main(int argc, char *argv[])
 	pid_t pid;
 	int flags = 0;
 
-	pid = lxc_raw_clone(CLONE_PARENT_SETTID);
+	pid = lxc_raw_clone(CLONE_PARENT_SETTID, NULL);
 	if (pid >= 0 || pid != -EINVAL) {
 		lxc_error("%s\n", "Calling lxc_raw_clone(CLONE_PARENT_SETTID) "
 				  "should not be possible");
 		exit(EXIT_FAILURE);
 	}
 
-	pid = lxc_raw_clone(CLONE_CHILD_SETTID);
+	pid = lxc_raw_clone(CLONE_CHILD_SETTID, NULL);
 	if (pid >= 0 || pid != -EINVAL) {
 		lxc_error("%s\n", "Calling lxc_raw_clone(CLONE_CHILD_SETTID) "
 				  "should not be possible");
 		exit(EXIT_FAILURE);
 	}
 
-	pid = lxc_raw_clone(CLONE_CHILD_CLEARTID);
+	pid = lxc_raw_clone(CLONE_CHILD_CLEARTID, NULL);
 	if (pid >= 0 || pid != -EINVAL) {
 		lxc_error("%s\n", "Calling lxc_raw_clone(CLONE_CHILD_CLEARTID) "
 				  "should not be possible");
 		exit(EXIT_FAILURE);
 	}
 
-	pid = lxc_raw_clone(CLONE_SETTLS);
+	pid = lxc_raw_clone(CLONE_SETTLS, NULL);
 	if (pid >= 0 || pid != -EINVAL) {
 		lxc_error("%s\n", "Calling lxc_raw_clone(CLONE_SETTLS) should "
 				  "not be possible");
 		exit(EXIT_FAILURE);
 	}
 
-	pid = lxc_raw_clone(CLONE_VM);
+	pid = lxc_raw_clone(CLONE_VM, NULL);
 	if (pid >= 0 || pid != -EINVAL) {
 		lxc_error("%s\n", "Calling lxc_raw_clone(CLONE_VM) should "
 			  "not be possible");
 		exit(EXIT_FAILURE);
 	}
 
-	pid = lxc_raw_clone(0);
+	pid = lxc_raw_clone(0, NULL);
 	if (pid < 0) {
 		lxc_error("%s\n", "Failed to call lxc_raw_clone(0)");
 		exit(EXIT_FAILURE);
@@ -99,7 +85,7 @@ int main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	pid = lxc_raw_clone(0);
+	pid = lxc_raw_clone(0, NULL);
 	if (pid < 0) {
 		lxc_error("%s\n", "Failed to call lxc_raw_clone(0)");
 		exit(EXIT_FAILURE);
@@ -125,7 +111,8 @@ int main(int argc, char *argv[])
 	flags |= CLONE_NEWIPC;
 	flags |= CLONE_NEWPID;
 	flags |= CLONE_NEWUTS;
-	pid = lxc_raw_clone(flags);
+
+	pid = lxc_raw_clone(flags, NULL);
 	if (pid < 0) {
 		lxc_error("%s\n", "Failed to call lxc_raw_clone(CLONE_NEWUSER "
 				  "| CLONE_NEWCGROUP | CLONE_NEWNS | "
@@ -145,7 +132,7 @@ int main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	pid = lxc_raw_clone(flags);
+	pid = lxc_raw_clone(flags, NULL);
 	if (pid < 0) {
 		lxc_error("%s\n", "Failed to call lxc_raw_clone(CLONE_NEWUSER "
 				  "| CLONE_NEWCGROUP | CLONE_NEWNS | "
@@ -166,12 +153,11 @@ int main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	pid = lxc_raw_clone(CLONE_VFORK);
+	pid = lxc_raw_clone(CLONE_VFORK, NULL);
 	if (pid < 0) {
 		lxc_error("%s\n", "Failed to call lxc_raw_clone(CLONE_VFORK);");
 		exit(EXIT_FAILURE);
 	}
-
 
 	if (pid == 0) {
 		lxc_error("%s\n", "Child will exit(EXIT_SUCCESS)");
@@ -184,12 +170,11 @@ int main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	pid = lxc_raw_clone(CLONE_VFORK);
+	pid = lxc_raw_clone(CLONE_VFORK, NULL);
 	if (pid < 0) {
 		lxc_error("%s\n", "Failed to call lxc_raw_clone(CLONE_VFORK);");
 		exit(EXIT_FAILURE);
 	}
-
 
 	if (pid == 0) {
 		lxc_error("%s\n", "Child will exit(EXIT_FAILURE)");
@@ -202,12 +187,11 @@ int main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	pid = lxc_raw_clone(CLONE_FILES);
+	pid = lxc_raw_clone(CLONE_FILES, NULL);
 	if (pid < 0) {
 		lxc_error("%s\n", "Failed to call lxc_raw_clone(CLONE_FILES);");
 		exit(EXIT_FAILURE);
 	}
-
 
 	if (pid == 0) {
 		lxc_error("%s\n", "Child will exit(EXIT_SUCCESS)");
@@ -220,12 +204,11 @@ int main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	pid = lxc_raw_clone(CLONE_FILES);
+	pid = lxc_raw_clone(CLONE_FILES, NULL);
 	if (pid < 0) {
 		lxc_error("%s\n", "Failed to call lxc_raw_clone(CLONE_FILES);");
 		exit(EXIT_FAILURE);
 	}
-
 
 	if (pid == 0) {
 		lxc_error("%s\n", "Child will exit(EXIT_FAILURE)");

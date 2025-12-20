@@ -1,27 +1,7 @@
-/*
- * lxc: linux Container library
- *
- * (C) Copyright IBM Corp. 2007, 2008
- *
- * Authors:
- * Daniel Lezcano <daniel.lezcano at free.fr>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
-#define _GNU_SOURCE
+#include "config.h"
+
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -30,7 +10,6 @@
 #include <sys/mount.h>
 #include <unistd.h>
 
-#include "config.h"
 #include "log.h"
 #include "parse.h"
 #include "rsync.h"
@@ -47,17 +26,17 @@ struct zfs_args {
 	void *argv;
 };
 
-int zfs_detect_exec_wrapper(void *data)
+static int zfs_detect_exec_wrapper(void *data)
 {
 	struct zfs_args *args = data;
 
-	execlp("zfs", "zfs", "get", "type", "-H", "-o", "name", args->dataset,
+	execlp("zfs", "zfs", "get", "-H", "-o", "name", "type", args->dataset,
 	       (char *)NULL);
 
 	return -1;
 }
 
-int zfs_create_exec_wrapper(void *args)
+static int zfs_create_exec_wrapper(void *args)
 {
 	struct zfs_args *zfs_args = args;
 
@@ -66,7 +45,7 @@ int zfs_create_exec_wrapper(void *args)
 	return -1;
 }
 
-int zfs_delete_exec_wrapper(void *args)
+static int zfs_delete_exec_wrapper(void *args)
 {
 	struct zfs_args *zfs_args = args;
 
@@ -75,7 +54,7 @@ int zfs_delete_exec_wrapper(void *args)
 	return -1;
 }
 
-int zfs_snapshot_exec_wrapper(void *args)
+static int zfs_snapshot_exec_wrapper(void *args)
 {
 	struct zfs_args *zfs_args = args;
 
@@ -84,7 +63,7 @@ int zfs_snapshot_exec_wrapper(void *args)
 	return -1;
 }
 
-int zfs_clone_exec_wrapper(void *args)
+static int zfs_clone_exec_wrapper(void *args)
 {
 	struct zfs_args *zfs_args = args;
 
@@ -95,11 +74,11 @@ int zfs_clone_exec_wrapper(void *args)
 	return -1;
 }
 
-int zfs_get_parent_snapshot_exec_wrapper(void *args)
+static int zfs_get_parent_snapshot_exec_wrapper(void *args)
 {
 	struct zfs_args *zfs_args = args;
 
-	execlp("zfs", "zfs", "get", "origin", "-o", "value", "-H",
+	execlp("zfs", "zfs", "get", "-H", "-o", "value", "origin",
 	       zfs_args->dataset, (char *)NULL);
 
 	return -1;
@@ -119,7 +98,6 @@ static bool zfs_list_entry(const char *path, char *output, size_t inlen)
 	while (fgets(output, inlen, f->f)) {
 		if (strstr(output, path)) {
 			found = true;
-			break;
 		}
 	}
 	(void)lxc_pclose(f);
@@ -132,7 +110,7 @@ bool zfs_detect(const char *path)
 	int ret;
 	char *dataset;
 	struct zfs_args cmd_args = {0};
-	char cmd_output[MAXPATHLEN] = {0};
+	char cmd_output[PATH_MAX] = {0};
 
 	if (!strncmp(path, "zfs:", 4))
 		return true;
@@ -178,12 +156,13 @@ bool zfs_detect(const char *path)
 
 int zfs_mount(struct lxc_storage *bdev)
 {
+	__do_free char *mntdata = NULL;
+	unsigned long mntflags = 0;
 	int ret;
 	size_t oldlen, newlen, totallen;
-	char *mntdata, *tmp;
+	char *tmp;
 	const char *src;
-	unsigned long mntflags;
-	char cmd_output[MAXPATHLEN] = {0};
+	char cmd_output[PATH_MAX] = {0};
 
 	if (strcmp(bdev->type, "zfs"))
 		return -22;
@@ -191,10 +170,9 @@ int zfs_mount(struct lxc_storage *bdev)
 	if (!bdev->src || !bdev->dest)
 		return -22;
 
-	ret = parse_mntopts(bdev->mntopts, &mntflags, &mntdata);
+	ret = parse_mntopts_legacy(bdev->mntopts, &mntflags, &mntdata);
 	if (ret < 0) {
 		ERROR("Failed to parse mount options");
-		free(mntdata);
 		return -22;
 	}
 
@@ -239,7 +217,6 @@ int zfs_mount(struct lxc_storage *bdev)
 	tmp = realloc(mntdata, totallen);
 	if (!tmp) {
 		ERROR("Failed to reallocate memory");
-		free(mntdata);
 		return -1;
 	}
 	mntdata = tmp;
@@ -247,12 +224,10 @@ int zfs_mount(struct lxc_storage *bdev)
 	ret = snprintf((mntdata + oldlen), newlen, ",zfsutil,mntpoint=%s", src);
 	if (ret < 0 || (size_t)ret >= newlen) {
 		ERROR("Failed to create string");
-		free(mntdata);
 		return -1;
 	}
 
 	ret = mount(src, bdev->dest, "zfs", mntflags, mntdata);
-	free(mntdata);
 	if (ret < 0 && errno != EBUSY) {
 		SYSERROR("Failed to mount \"%s\" on \"%s\"", src, bdev->dest);
 		return -1;
@@ -285,7 +260,7 @@ bool zfs_copy(struct lxc_conf *conf, struct lxc_storage *orig,
 	      struct lxc_storage *new, uint64_t newsize)
 {
 	int ret;
-	char cmd_output[MAXPATHLEN], option[MAXPATHLEN];
+	char cmd_output[PATH_MAX], option[PATH_MAX];
 	struct rsync_data data = {0, 0};
 	struct zfs_args cmd_args = {0};
 	const char *argv[] = {"zfs",			   /* 0    */
@@ -297,8 +272,8 @@ bool zfs_copy(struct lxc_conf *conf, struct lxc_storage *orig,
 			      NULL};
 
 	/* mountpoint */
-	ret = snprintf(option, MAXPATHLEN, "mountpoint=%s", new->dest);
-	if (ret < 0 || ret >= MAXPATHLEN) {
+	ret = snprintf(option, PATH_MAX, "mountpoint=%s", new->dest);
+	if (ret < 0 || ret >= PATH_MAX) {
 		ERROR("Failed to create string");
 		return false;
 	}
@@ -317,7 +292,7 @@ bool zfs_copy(struct lxc_conf *conf, struct lxc_storage *orig,
 		TRACE("Created zfs dataset \"%s\"", new->src);
 	}
 
-	ret = mkdir_p(new->dest, 0755);
+	ret = lxc_mkdir_p(new->dest, 0755);
 	if (ret < 0 && errno != EEXIST) {
 		SYSERROR("Failed to create directory \"%s\"", new->dest);
 		return false;
@@ -346,7 +321,7 @@ bool zfs_snapshot(struct lxc_conf *conf, struct lxc_storage *orig,
 	char *tmp, *snap_name, *snapshot;
 	const char *orig_src;
 	struct zfs_args cmd_args = {0};
-	char cmd_output[MAXPATHLEN] = {0}, option[MAXPATHLEN];
+	char cmd_output[PATH_MAX] = {0}, option[PATH_MAX];
 
 	orig_src = lxc_storage_get_path(orig->src, orig->type);
 	if (*orig_src == '/') {
@@ -402,7 +377,7 @@ bool zfs_snapshot(struct lxc_conf *conf, struct lxc_storage *orig,
 
 	len -= snapshot_len;
 	ret = snprintf(snapshot + snapshot_len, len, "@%s", snap_name);
-	if (ret < 0 || ret >= len) {
+	if (ret < 0 || (size_t)ret >= len) {
 		ERROR("Failed to create string");
 		free(snapshot);
 		return false;
@@ -421,11 +396,11 @@ bool zfs_snapshot(struct lxc_conf *conf, struct lxc_storage *orig,
 		TRACE("Created zfs snapshot \"%s\"", snapshot);
 	}
 
-	ret = snprintf(option, MAXPATHLEN, "mountpoint=%s", new->dest);
-	if (ret < 0 || ret >= MAXPATHLEN) {
+	ret = snprintf(option, PATH_MAX, "mountpoint=%s", new->dest);
+	if (ret < 0 || ret >= PATH_MAX) {
 		ERROR("Failed to create string");
 		free(snapshot);
-		return -1;
+		return false;
 	}
 
 	cmd_args.dataset = lxc_storage_get_path(new->src, new->type);
@@ -453,7 +428,7 @@ int zfs_clonepaths(struct lxc_storage *orig, struct lxc_storage *new,
 	char *dataset, *tmp;
 	const char *orig_src;
 	size_t dataset_len, len;
-	char cmd_output[MAXPATHLEN] = {0};
+	char cmd_output[PATH_MAX] = {0};
 
 	if (!orig->src || !orig->dest)
 		return -1;
@@ -466,7 +441,6 @@ int zfs_clonepaths(struct lxc_storage *orig, struct lxc_storage *new,
 
 	orig_src = lxc_storage_get_path(orig->src, orig->type);
 	if (!strcmp(orig->type, "zfs")) {
-		size_t len;
 		if (*orig_src == '/') {
 			bool found;
 
@@ -526,18 +500,26 @@ int zfs_clonepaths(struct lxc_storage *orig, struct lxc_storage *new,
 	 */
 	dataset_len = strlen(dataset);
 	len = 4 + dataset_len + 1 + strlen(cname) + 1;
+
+/* see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=104069 */
+#pragma GCC diagnostic push
+#if defined __GNUC__ && __GNUC__ >= 12
+#pragma GCC diagnostic ignored "-Wuse-after-free"
+#endif
 	new->src = realloc(dataset, len);
 	if (!new->src) {
 		ERROR("Failed to reallocate memory");
 		free(dataset);
 		return -1;
 	}
+#pragma GCC diagnostic pop
+
 	memmove(new->src + 4, new->src, dataset_len);
 	memmove(new->src, "zfs:", 4);
 
 	len -= dataset_len - 4;
 	ret = snprintf(new->src + dataset_len + 4, len, "/%s", cname);
-	if (ret < 0 || ret >= len) {
+	if (ret < 0 || (size_t)ret >= len) {
 		ERROR("Failed to create string");
 		return -1;
 	}
@@ -562,12 +544,12 @@ int zfs_clonepaths(struct lxc_storage *orig, struct lxc_storage *new,
 	}
 
 	ret = snprintf(new->dest, len, "%s/%s/rootfs", lxcpath, cname);
-	if (ret < 0 || ret >= len) {
+	if (ret < 0 || (size_t)ret >= len) {
 		ERROR("Failed to create string \"%s/%s/rootfs\"", lxcpath, cname);
 		return -1;
 	}
 
-	ret = mkdir_p(new->dest, 0755);
+	ret = lxc_mkdir_p(new->dest, 0755);
 	if (ret < 0 && errno != EEXIST) {
 		SYSERROR("Failed to create directory \"%s\"", new->dest);
 		return -1;
@@ -584,7 +566,7 @@ int zfs_destroy(struct lxc_storage *orig)
 	bool found;
 	char *parent_snapshot = NULL;
 	struct zfs_args cmd_args = {0};
-	char cmd_output[MAXPATHLEN] = {0};
+	char cmd_output[PATH_MAX] = {0};
 
 	src = lxc_storage_get_path(orig->src, orig->type);
 
@@ -592,8 +574,6 @@ int zfs_destroy(struct lxc_storage *orig)
 	 * "<lxcpath>/<lxcname>/rootfs" is given.
 	 */
 	if (*src == '/') {
-		char *tmp;
-
 		found = zfs_list_entry(src, cmd_output, sizeof(cmd_output));
 		if (!found) {
 			ERROR("Failed to find zfs entry \"%s\"", orig->src);
@@ -706,13 +686,13 @@ int zfs_destroy(struct lxc_storage *orig)
 }
 
 int zfs_create(struct lxc_storage *bdev, const char *dest, const char *n,
-	       struct bdev_specs *specs)
+	       struct bdev_specs *specs, const struct lxc_conf *conf)
 {
 	const char *zfsroot;
 	int ret;
 	size_t len;
 	struct zfs_args cmd_args = {0};
-	char cmd_output[MAXPATHLEN], option[MAXPATHLEN];
+	char cmd_output[PATH_MAX], option[PATH_MAX];
 	const char *argv[] = {"zfs",			   /* 0    */
 			      "create",			   /* 1    */
 			      "-o",     "",		   /* 2, 3 */
@@ -742,14 +722,14 @@ int zfs_create(struct lxc_storage *bdev, const char *dest, const char *n,
 	}
 
 	ret = snprintf(bdev->src, len, "zfs:%s/%s", zfsroot, n);
-	if (ret < 0 || ret >= len) {
+	if (ret < 0 || (size_t)ret >= len) {
 		ERROR("Failed to create string");
 		return -1;
 	}
 	argv[7] = lxc_storage_get_path(bdev->src, bdev->type);
 
-	ret = snprintf(option, MAXPATHLEN, "mountpoint=%s", bdev->dest);
-	if (ret < 0 || ret >= MAXPATHLEN) {
+	ret = snprintf(option, PATH_MAX, "mountpoint=%s", bdev->dest);
+	if (ret < 0 || ret >= PATH_MAX) {
 		ERROR("Failed to create string");
 		return -1;
 	}
@@ -767,7 +747,7 @@ int zfs_create(struct lxc_storage *bdev, const char *dest, const char *n,
 		TRACE("Created zfs dataset \"%s\"", bdev->src);
 	}
 
-	ret = mkdir_p(bdev->dest, 0755);
+	ret = lxc_mkdir_p(bdev->dest, 0755);
 	if (ret < 0 && errno != EEXIST) {
 		SYSERROR("Failed to create directory \"%s\"", bdev->dest);
 		return -1;

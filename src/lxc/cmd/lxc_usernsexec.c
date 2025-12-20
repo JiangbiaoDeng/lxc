@@ -1,70 +1,51 @@
-/*
- * (C) Copyright IBM Corp. 2008
- * (C) Copyright Canonical, Inc 2010-2013
- *
- * Authors:
- * Serge Hallyn <serge.hallyn@ubuntu.com>
- * (Once upon a time, this was based on nsexec from the IBM
- *  container tools)
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
+
 #include "config.h"
 
+#include <errno.h>
+#include <fcntl.h>
+#include <grp.h>
+#include <libgen.h>
+#include <pwd.h>
+#include <sched.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <sched.h>
-#include <sys/syscall.h>
-#include <signal.h>
 #include <string.h>
-#include <errno.h>
-#include <libgen.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 #include <sys/mount.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
 #include <sys/wait.h>
-#include <sched.h>
-#include <pwd.h>
-#include <grp.h>
+#include <unistd.h>
 
+#include "compiler.h"
 #include "conf.h"
-#include "namespace.h"
+#include "hlist.h"
+#include "idmap_utils.h"
+#include "list.h"
+#include "log.h"
+#include "macro.h"
+#include "memory_utils.h"
+#include "file_utils.h"
+#include "string_utils.h"
+#include "syscall_wrappers.h"
 #include "utils.h"
 
-#ifndef MS_REC
-#define MS_REC 16384
-#endif
-
-#ifndef MS_SLAVE
-#define MS_SLAVE (1 << 19)
-#endif
-
-extern int lxc_log_fd;
-
-int unshare(int flags);
+__hidden extern int lxc_log_fd;
+/* Assume we want to become root */
+static uid_t uid = 0;
+static gid_t gid = 0;
 
 static void usage(const char *name)
 {
-	printf("usage: %s [-h] [-m <uid-maps>] -- [command [arg ..]]\n", name);
+	printf("usage: %s [-h] [-m <uid-maps>] [-s] -- [command [arg ..]]\n", name);
 	printf("\n");
 	printf("  -h            this message\n");
 	printf("\n");
 	printf("  -m <uid-maps> uid maps to use\n");
 	printf("\n");
+	printf("  -s:           map self\n");
 	printf("  uid-maps: [u|g|b]:ns_id:host_id:range\n");
 	printf("            [u|g|b]: map user id, group id, or both\n");
 	printf("            ns_id: the base id in the new namespace\n");
@@ -75,28 +56,31 @@ static void usage(const char *name)
 	printf("        calling user permission to use the mapped ranges\n");
 }
 
-static void opentty(const char * tty, int which) {
-	int fd, flags;
+static void opentty(const char *tty, int which)
+{
+	int fd, flags, ret;
 
 	if (tty[0] == '\0')
 		return;
 
 	fd = open(tty, O_RDWR | O_NONBLOCK);
-	if (fd == -1) {
-		printf("WARN: could not reopen tty: %s\n", strerror(errno));
+	if (fd < 0) {
+		CMD_SYSINFO("Failed to open tty");
 		return;
 	}
 
 	flags = fcntl(fd, F_GETFL);
 	flags &= ~O_NONBLOCK;
-	if (fcntl(fd, F_SETFL, flags) < 0) {
-		printf("WARN: could not set fd flags: %s\n", strerror(errno));
+	ret = fcntl(fd, F_SETFL, flags);
+	if (ret < 0) {
+		CMD_SYSINFO("Failed to remove O_NONBLOCK from file descriptor %d", fd);
+		close(fd);
 		return;
 	}
 
 	close(which);
 	if (fd != which) {
-		dup2(fd, which);
+		(void)dup2(fd, which);
 		close(fd);
 	}
 }
@@ -104,51 +88,63 @@ static void opentty(const char * tty, int which) {
 
 static int do_child(void *vargv)
 {
+	int ret;
 	char **argv = (char **)vargv;
 
-	/* Assume we want to become root */
-	if (setgid(0) < 0) {
-		perror("setgid");
+	if (!lxc_drop_groups() && errno != EPERM)
+		return -1;
+
+	if (!lxc_switch_uid_gid(uid, gid))
+		return -1;
+
+	ret = unshare(CLONE_NEWNS);
+	if (ret < 0) {
+		CMD_SYSERROR("Failed to unshare mount namespace");
 		return -1;
 	}
-	if (setuid(0) < 0) {
-		perror("setuid");
-		return -1;
-	}
-	if (setgroups(0, NULL) < 0) {
-		perror("setgroups");
-		return -1;
-	}
-	if (unshare(CLONE_NEWNS) < 0) {
-		perror("unshare CLONE_NEWNS");
-		return -1;
-	}
+
 	if (detect_shared_rootfs()) {
-		if (mount(NULL, "/", NULL, MS_SLAVE|MS_REC, NULL)) {
-			printf("Failed to make / rslave\n");
+		ret = mount(NULL, "/", NULL, MS_SLAVE | MS_REC, NULL);
+		if (ret < 0) {
+			CMD_SYSINFO("Failed to recursively turn root mount tree into dependent mount");
 			return -1;
 		}
 	}
+
 	execvp(argv[0], argv);
-	perror("execvpe");
+	CMD_SYSERROR("Failed to execute \"%s\"", argv[0]);
 	return -1;
 }
 
-static struct lxc_list active_map;
+static LIST_HEAD(active_map);
+
+static int add_map_entry(long host_id, long ns_id, long range, int which)
+{
+	struct id_map *newmap;
+
+	newmap = zalloc(sizeof(*newmap));
+	if (!newmap)
+		return -1;
+
+	newmap->hostid = host_id;
+	newmap->nsid = ns_id;
+	newmap->range = range;
+	newmap->idtype = which;
+
+	list_add_tail(&newmap->head, &active_map);
+	return 0;
+}
 
 /*
- * given a string like "b:0:100000:10", map both uids and gids
- * 0-10 to 100000 to 100010
+ * Given a string like "b:0:100000:10", map both uids and gids 0-10 to 100000
+ * to 100010
  */
 static int parse_map(char *map)
 {
-	struct id_map *newmap;
-	struct lxc_list *tmp = NULL;
-	int ret;
-	int i;
-	char types[2] = {'u', 'g'};
-	char which;
+	int i, ret, idtype;
 	long host_id, ns_id, range;
+	char which;
+	char types[2] = {'u', 'g'};
 
 	if (!map)
 		return -1;
@@ -164,164 +160,220 @@ static int parse_map(char *map)
 		if (which != types[i] && which != 'b')
 			continue;
 
-		newmap = malloc(sizeof(*newmap));
-		if (!newmap)
-			return -1;
-
-		newmap->hostid = host_id;
-		newmap->nsid = ns_id;
-		newmap->range = range;
-
 		if (types[i] == 'u')
-			newmap->idtype = ID_TYPE_UID;
+			idtype = ID_TYPE_UID;
 		else
-			newmap->idtype = ID_TYPE_GID;
+			idtype = ID_TYPE_GID;
 
-		tmp = malloc(sizeof(*tmp));
-		if (!tmp) {
-			free(newmap);
-			return -1;
-		}
-
-		tmp->elem = newmap;
-		lxc_list_add_tail(&active_map, tmp);
+		ret = add_map_entry(host_id, ns_id, range, idtype);
+		if (ret < 0)
+			return ret;
 	}
 
 	return 0;
 }
 
 /*
- * This is called if the user did not pass any uid ranges in
- * through -m flags.  It's called once to get the default uid
- * map, and once for the default gid map.
- * Go through /etc/subuids and /etc/subgids to find this user's
- * allowed map.  We only use the first one for each of uid and
- * gid, because otherwise we're not sure which entries the user
- * wanted.
+ * This is called if the user did not pass any uid ranges in through -m flags.
+ * It's called once to get the default uid map, and once for the default gid
+ * map.
+ * Go through /etc/subuids and /etc/subgids to find this user's allowed map. We
+ * only use the first one for each of uid and gid, because otherwise we're not
+ * sure which entries the user wanted.
  */
-static int read_default_map(char *fnam, int which, char *username)
+static int read_default_map(char *fnam, int which, char *user)
 {
-	FILE *fin;
-	char *line = NULL;
-	size_t sz = 0;
-	struct id_map *newmap;
-	struct lxc_list *tmp = NULL;
+	__do_free char *line = NULL;
+	__do_fclose FILE *fin = NULL;
+	size_t len;
 	char *p1, *p2;
+	unsigned long ul1, ul2;
+	int ret = -1;
+	size_t sz = 0;
 
-	fin = fopen(fnam, "r");
+	fin = fopen(fnam, "re");
 	if (!fin)
 		return -1;
+
+	len = strlen(user);
 	while (getline(&line, &sz, fin) != -1) {
-		if (sz <= strlen(username) ||
-		    strncmp(line, username, strlen(username)) != 0 ||
-		    line[strlen(username)] != ':')
+		if (sz <= len || strncmp(line, user, len) != 0 || line[len] != ':')
 			continue;
+
 		p1 = strchr(line, ':');
 		if (!p1)
 			continue;
-		p2 = strchr(p1+1, ':');
+
+		p2 = strchr(p1 + 1, ':');
 		if (!p2)
 			continue;
-		newmap = malloc(sizeof(*newmap));
-		if (!newmap)  {
-			fclose(fin);
-			free(line);
-			return -1;
-		}
-		newmap->hostid = atol(p1+1);
-		newmap->range = atol(p2+1);
-		newmap->nsid = 0;
-		newmap->idtype = which;
 
-		tmp = malloc(sizeof(*tmp));
-		if (!tmp) {
-			fclose(fin);
-			free(line);
-			free(newmap);
-			return -1;
-		}
+		line[strlen(line) - 1] = '\0';
+		*p2 = '\0';
 
-		tmp->elem = newmap;
-		lxc_list_add_tail(&active_map, tmp);
+		ret = lxc_safe_ulong(p1 + 1, &ul1);
+		if (ret < 0)
+			break;
+
+		ret = lxc_safe_ulong(p2 + 1, &ul2);
+		if (ret < 0)
+			break;
+
+		ret = add_map_entry(ul1, 0, ul2, which);
 		break;
 	}
 
-	free(line);
-	fclose(fin);
-	return 0;
+	return ret;
 }
 
 static int find_default_map(void)
 {
-	struct passwd *p = getpwuid(getuid());
-	if (!p)
+	__do_free char *buf = NULL;
+	ssize_t bufsize;
+	struct passwd pwent;
+	int ret = -1;
+	struct passwd *pwentp = NULL;
+
+	bufsize = sysconf(_SC_GETPW_R_SIZE_MAX);
+	if (bufsize < 0)
+		bufsize = 1024;
+
+	buf = malloc(bufsize);
+	if (!buf)
 		return -1;
-	if (read_default_map(subuidfile, ID_TYPE_UID, p->pw_name) < 0)
+
+	ret = getpwuid_r(getuid(), &pwent, buf, bufsize, &pwentp);
+	if (!pwentp) {
+		if (ret == 0)
+			CMD_SYSERROR("Failed to find matched password record");
+
+		CMD_SYSERROR("Failed to get password record for uid %d", getuid());
 		return -1;
-	if (read_default_map(subgidfile, ID_TYPE_GID, p->pw_name) < 0)
+	}
+
+	ret = read_default_map(subuidfile, ID_TYPE_UID, pwent.pw_name);
+	if (ret < 0)
 		return -1;
-    return 0;
+
+	ret = read_default_map(subgidfile, ID_TYPE_GID, pwent.pw_name);
+	if (ret < 0)
+		return -1;
+
+	return 0;
+}
+
+static bool is_in_ns_range(unsigned long id, struct id_map *map)
+{
+	if (id < map->nsid)
+		return false;
+
+	if (id >= map->nsid + map->range)
+		return false;
+
+	return true;
+}
+
+static bool do_map_self(void)
+{
+	struct id_map *map;
+	long nsuid = 0, nsgid = 0;
+	int ret;
+
+	list_for_each_entry(map, &active_map, head) {
+		if (map->idtype == ID_TYPE_UID) {
+			if (is_in_ns_range(nsuid, map))
+				nsuid += map->range;
+		} else {
+			if (is_in_ns_range(nsgid, map))
+				nsgid += map->range;
+		}
+	}
+
+	ret = add_map_entry(getgid(), nsgid, 1, ID_TYPE_GID);
+	if (ret < 0)
+		return false;
+	ret = add_map_entry(getuid(), nsuid, 1, ID_TYPE_UID);
+	if (ret < 0)
+		return false;
+	return true;
 }
 
 int main(int argc, char *argv[])
 {
-	int c;
-	unsigned long flags = CLONE_NEWUSER | CLONE_NEWNS;
-	char ttyname0[256], ttyname1[256], ttyname2[256];
-	int status;
-	int ret;
-	int pid;
-	char *default_args[] = {"/bin/sh", NULL};
+	int c, pid, ret, status;
 	char buf[1];
-	int pipe1[2],  /* child tells parent it has unshared */
-	    pipe2[2];  /* parent tells child it is mapped and may proceed */
+	int pipe_fds1[2], /* child tells parent it has unshared */
+	    pipe_fds2[2]; /* parent tells child it is mapped and may proceed */
+	unsigned long flags = CLONE_NEWUSER | CLONE_NEWNS;
+	char ttyname0[256] = {0}, ttyname1[256] = {0}, ttyname2[256] = {0};
+	char *default_args[] = {"/bin/sh", NULL};
+	bool map_self = false;
 
 	lxc_log_fd = STDERR_FILENO;
 
-	memset(ttyname0, '\0', sizeof(ttyname0));
-	memset(ttyname1, '\0', sizeof(ttyname1));
-	memset(ttyname2, '\0', sizeof(ttyname2));
-	if (isatty(0)) {
+	if (isatty(STDIN_FILENO)) {
 		ret = readlink("/proc/self/fd/0", ttyname0, sizeof(ttyname0));
 		if (ret < 0) {
-			perror("unable to open stdin.");
-			exit(EXIT_FAILURE);
+			CMD_SYSERROR("Failed to open stdin");
+			_exit(EXIT_FAILURE);
 		}
+
 		ret = readlink("/proc/self/fd/1", ttyname1, sizeof(ttyname1));
 		if (ret < 0) {
-			printf("Warning: unable to open stdout, continuing.\n");
-			memset(ttyname1, '\0', sizeof(ttyname1));
+			CMD_SYSINFO("Failed to open stdout. Continuing");
+			ttyname1[0] = '\0';
 		}
+
 		ret = readlink("/proc/self/fd/2", ttyname2, sizeof(ttyname2));
 		if (ret < 0) {
-			printf("Warning: unable to open stderr, continuing.\n");
-			memset(ttyname2, '\0', sizeof(ttyname2));
+			CMD_SYSINFO("Failed to open stderr. Continuing");
+			ttyname2[0] = '\0';
 		}
 	}
 
-	lxc_list_init(&active_map);
-
-	while ((c = getopt(argc, argv, "m:h")) != EOF) {
+	while ((c = getopt(argc, argv, "m:hsu:g:")) != EOF) {
 		switch (c) {
-			case 'm':
-				if (parse_map(optarg)) {
-					usage(argv[0]);
-					exit(EXIT_FAILURE);
-				}
-				break;
-			case 'h':
-				  usage(argv[0]);
-				  exit(EXIT_SUCCESS);
-			default:
-				  usage(argv[0]);
-				  exit(EXIT_FAILURE);
+		case 'm':
+			ret = parse_map(optarg);
+			if (ret < 0) {
+				usage(argv[0]);
+				_exit(EXIT_FAILURE);
+			}
+			break;
+		case 'h':
+			usage(argv[0]);
+			_exit(EXIT_SUCCESS);
+		case 's':
+			map_self = true;
+			break;
+		case 'u':
+			if (lxc_safe_uint(optarg, &uid) < 0)
+				return -1;
+			break;
+		case 'g':
+			if (lxc_safe_uint(optarg, &gid) < 0)
+				return -1;
+			break;
+		default:
+			usage(argv[0]);
+			_exit(EXIT_FAILURE);
 		}
 	};
 
-	if (lxc_list_empty(&active_map)) {
-		if (find_default_map()) {
-			fprintf(stderr, "You have no allocated subuids or subgids\n");
-			exit(EXIT_FAILURE);
+	if (list_empty(&active_map)) {
+		ret = find_default_map();
+		if (ret < 0) {
+			fprintf(stderr, "Failed to find subuid or subgid allocation\n");
+			_exit(EXIT_FAILURE);
+		}
+	}
+
+	// Do we want to support map-self with no other allocations?
+	// If so we should move this above the previous block.
+	if (map_self) {
+		if (!do_map_self()) {
+			fprintf(stderr, "Failed mapping own uid\n");
+			_exit(EXIT_FAILURE);
 		}
 	}
 
@@ -330,64 +382,105 @@ int main(int argc, char *argv[])
 	if (argc < 1)
 		argv = default_args;
 
-	if (pipe(pipe1) < 0 || pipe(pipe2) < 0) {
-		perror("pipe");
-		exit(EXIT_FAILURE);
+	ret = pipe2(pipe_fds1, O_CLOEXEC);
+	if (ret < 0) {
+		CMD_SYSERROR("Failed to open new pipe");
+		_exit(EXIT_FAILURE);
 	}
-	if ((pid = fork()) == 0) {
-		/* Child. */
 
-		close(pipe1[0]);
-		close(pipe2[1]);
-		opentty(ttyname0, 0);
-		opentty(ttyname1, 1);
-		opentty(ttyname2, 2);
+	ret = pipe2(pipe_fds2, O_CLOEXEC);
+	if (ret < 0) {
+		CMD_SYSERROR("Failed to open new pipe");
+		close(pipe_fds1[0]);
+		close(pipe_fds1[1]);
+		_exit(EXIT_FAILURE);
+	}
+
+	pid = fork();
+	if (pid < 0) {
+		close(pipe_fds1[0]);
+		close(pipe_fds1[1]);
+		close(pipe_fds2[0]);
+		close(pipe_fds2[1]);
+		_exit(EXIT_FAILURE);
+	}
+
+	if (pid == 0) {
+		close(pipe_fds1[0]);
+		close(pipe_fds2[1]);
+
+		opentty(ttyname0, STDIN_FILENO);
+		opentty(ttyname1, STDOUT_FILENO);
+		opentty(ttyname2, STDERR_FILENO);
 
 		ret = unshare(flags);
 		if (ret < 0) {
-			perror("unshare");
-			return 1;
-		}
-		buf[0] = '1';
-		if (write(pipe1[1], buf, 1) < 1) {
-			perror("write pipe");
-			exit(EXIT_FAILURE);
-		}
-		if (read(pipe2[0], buf, 1) < 1) {
-			perror("read pipe");
-			exit(EXIT_FAILURE);
-		}
-		if (buf[0] != '1') {
-			fprintf(stderr, "parent had an error, child exiting\n");
-			exit(EXIT_FAILURE);
+			CMD_SYSERROR("Failed to unshare mount and user namespace");
+			close(pipe_fds1[1]);
+			close(pipe_fds2[0]);
+			_exit(EXIT_FAILURE);
 		}
 
-		close(pipe1[1]);
-		close(pipe2[0]);
-		return do_child((void*)argv);
+		buf[0] = '1';
+		ret = lxc_write_nointr(pipe_fds1[1], buf, 1);
+		if (ret != 1) {
+			CMD_SYSERROR("Failed to write to pipe file descriptor %d",
+				     pipe_fds1[1]);
+			close(pipe_fds1[1]);
+			close(pipe_fds2[0]);
+			_exit(EXIT_FAILURE);
+		}
+
+		ret = lxc_read_nointr(pipe_fds2[0], buf, 1);
+		if (ret != 1) {
+			CMD_SYSERROR("Failed to read from pipe file descriptor %d",
+				     pipe_fds2[0]);
+			close(pipe_fds1[1]);
+			close(pipe_fds2[0]);
+			_exit(EXIT_FAILURE);
+		}
+
+		close(pipe_fds1[1]);
+		close(pipe_fds2[0]);
+
+		if (buf[0] != '1') {
+			fprintf(stderr, "Received unexpected value from parent process\n");
+			_exit(EXIT_FAILURE);
+		}
+
+		ret = do_child((void *)argv);
+		if (ret < 0)
+			_exit(EXIT_FAILURE);
+
+		_exit(EXIT_SUCCESS);
 	}
 
-	close(pipe1[1]);
-	close(pipe2[0]);
-	if (read(pipe1[0], buf, 1) < 1) {
-		perror("read pipe");
-		exit(EXIT_FAILURE);
+	close(pipe_fds1[1]);
+	close(pipe_fds2[0]);
+
+	ret = lxc_read_nointr(pipe_fds1[0], buf, 1);
+	if (ret <= 0) {
+		CMD_SYSERROR("Failed to read from pipe file descriptor %d", pipe_fds1[0]);
+		_exit(EXIT_FAILURE);
 	}
 
 	buf[0] = '1';
 
-	if (lxc_map_ids(&active_map, pid))
-		fprintf(stderr, "error mapping child\n");
+	ret = lxc_map_ids(&active_map, pid);
+	if (ret < 0)
+		fprintf(stderr, "Failed to write id mapping for child process\n");
 
-	if (write(pipe2[1], buf, 1) < 0) {
-		perror("write to pipe");
-		exit(EXIT_FAILURE);
+	ret = lxc_write_nointr(pipe_fds2[1], buf, 1);
+	if (ret < 0) {
+		CMD_SYSERROR("Failed to write to pipe file descriptor %d", pipe_fds2[1]);
+		_exit(EXIT_FAILURE);
 	}
 
-	if ((ret = waitpid(pid, &status, __WALL)) < 0) {
-		printf("waitpid() returns %d, errno %d\n", ret, errno);
-		exit(EXIT_FAILURE);
+	ret = waitpid(pid, &status, __WALL);
+	if (ret < 0) {
+		CMD_SYSERROR("Failed to wait on child process");
+		_exit(EXIT_FAILURE);
 	}
 
-	exit(WEXITSTATUS(status));
+	_exit(WEXITSTATUS(status));
 }

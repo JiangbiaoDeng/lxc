@@ -2,6 +2,8 @@
 Description=LXC network bridge setup
 After=network-online.target
 Before=lxc.service
+Documentation=man:lxc
+ConditionVirtualization=!lxc
 
 [Service]
 Type=oneshot

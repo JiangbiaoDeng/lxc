@@ -1,27 +1,7 @@
-/*
- * lxc: linux Container library
- *
- * (C) Copyright IBM Corp. 2007, 2008
- *
- * Authors:
- * Daniel Lezcano <daniel.lezcano at free.fr>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
-#define _GNU_SOURCE
+#include "config.h"
+
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -32,16 +12,15 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
-#include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 #include "btrfs.h"
 #include "conf.h"
-#include "config.h"
 #include "dir.h"
 #include "error.h"
 #include "log.h"
@@ -49,8 +28,9 @@
 #include "lvm.h"
 #include "lxc.h"
 #include "lxclock.h"
-#include "nbd.h"
+#include "memory_utils.h"
 #include "namespace.h"
+#include "nbd.h"
 #include "overlay.h"
 #include "parse.h"
 #include "rbd.h"
@@ -59,6 +39,10 @@
 #include "storage_utils.h"
 #include "utils.h"
 #include "zfs.h"
+
+#if !HAVE_STRLCPY
+#include "strlcpy.h"
+#endif
 
 #ifndef BLKGETSIZE64
 #define BLKGETSIZE64 _IOR(0x12, 114, size_t)
@@ -123,7 +107,7 @@ static const struct lxc_storage_ops lvm_ops = {
 };
 
 /* nbd */
-const struct lxc_storage_ops nbd_ops = {
+static const struct lxc_storage_ops nbd_ops = {
     .detect = &nbd_detect,
     .mount = &nbd_mount,
     .umount = &nbd_umount,
@@ -231,7 +215,7 @@ static const struct lxc_storage_type *storage_query(struct lxc_conf *conf)
 	size_t i;
 	const struct lxc_storage_type *bdev;
 	const char *path = conf->rootfs.path;
-	const char *type = conf->rootfs.bdev_type;
+	const char *type = conf->rootfs.__bdev_type;
 
 	bdev = get_storage_by_name(path, type);
 	if (bdev)
@@ -248,7 +232,7 @@ static const struct lxc_storage_type *storage_query(struct lxc_conf *conf)
 	return &bdevs[i];
 }
 
-struct lxc_storage *storage_get(const char *type)
+static struct lxc_storage *storage_get(const char *type)
 {
 	size_t i;
 	struct lxc_storage *bdev;
@@ -273,7 +257,8 @@ struct lxc_storage *storage_get(const char *type)
 
 static struct lxc_storage *do_storage_create(const char *dest, const char *type,
 					     const char *cname,
-					     struct bdev_specs *specs)
+					     struct bdev_specs *specs,
+					     const struct lxc_conf *conf)
 {
 	int ret;
 	struct lxc_storage *bdev;
@@ -285,7 +270,7 @@ static struct lxc_storage *do_storage_create(const char *dest, const char *type,
 	if (!bdev)
 		return NULL;
 
-	ret = bdev->ops->create(bdev, dest, cname, specs);
+	ret = bdev->ops->create(bdev, dest, cname, specs, conf);
 	if (ret < 0) {
 		storage_put(bdev);
 		return NULL;
@@ -308,7 +293,7 @@ bool storage_can_backup(struct lxc_conf *conf)
 	return ret;
 }
 
-/* If we're not snaphotting, then storage_copy becomes a simple case of mount
+/* If we're not snapshotting, then storage_copy becomes a simple case of mount
  * the original, mount the new, and rsync the contents.
  */
 struct lxc_storage *storage_copy(struct lxc_container *c, const char *cname,
@@ -325,8 +310,16 @@ struct lxc_storage *storage_copy(struct lxc_container *c, const char *cname,
 	const char *src = c->lxc_conf->rootfs.path;
 	const char *oldname = c->name;
 	const char *oldpath = c->config_path;
-	char cmd_output[MAXPATHLEN] = {0};
+	char cmd_output[PATH_MAX] = {0};
 	struct rsync_data data = {0};
+	struct lxc_rootfs new_rootfs = {
+		.managed		= true,
+		.dfd_mnt		= -EBADF,
+		.dfd_dev		= -EBADF,
+		.dfd_host		= -EBADF,
+		.fd_path_pin		= -EBADF,
+		.dfd_idmapped		= -EBADF,
+	};
 
 	if (!src) {
 		ERROR("No rootfs specified");
@@ -342,14 +335,23 @@ struct lxc_storage *storage_copy(struct lxc_container *c, const char *cname,
 		return NULL;
 	}
 
-	orig = storage_init(c->lxc_conf);
-	if (!orig) {
+	ret = lxc_storage_prepare(c->lxc_conf);
+	if (ret) {
 		ERROR("Failed to detect storage driver for \"%s\"", oldname);
 		return NULL;
 	}
+	orig = c->lxc_conf->rootfs.storage;
+
+	if (c->lxc_conf->rootfs.dfd_idmapped >= 0) {
+		new_rootfs.dfd_idmapped = dup_cloexec(c->lxc_conf->rootfs.dfd_idmapped);
+		if (new_rootfs.dfd_idmapped < 0) {
+			SYSERROR("Failed to duplicate user namespace file descriptor");
+			lxc_storage_put(c->lxc_conf);
+			return NULL;
+		}
+	}
 
 	if (!orig->dest) {
-		int ret;
 		size_t len;
 		struct stat sb;
 
@@ -368,7 +370,7 @@ struct lxc_storage *storage_copy(struct lxc_container *c, const char *cname,
 
 		ret = stat(orig->dest, &sb);
 		if (ret < 0 && errno == ENOENT) {
-			ret = mkdir_p(orig->dest, 0755);
+			ret = lxc_mkdir_p(orig->dest, 0755);
 			if (ret < 0)
 				WARN("Failed to create directory \"%s\"", orig->dest);
 		}
@@ -418,6 +420,7 @@ struct lxc_storage *storage_copy(struct lxc_container *c, const char *cname,
 		goto on_error_put_orig;
 	}
 	TRACE("Initialized %s storage driver", new->type);
+	new->rootfs = &new_rootfs;
 
 	/* create new paths */
 	ret = new->ops->clone_paths(orig, new, oldname, cname, oldpath, lxcpath,
@@ -513,7 +516,7 @@ struct lxc_storage *storage_copy(struct lxc_container *c, const char *cname,
 	}
 
 on_success:
-	storage_put(orig);
+	lxc_storage_put(c->lxc_conf);
 
 	return new;
 
@@ -521,7 +524,7 @@ on_error_put_new:
 	storage_put(new);
 
 on_error_put_orig:
-	storage_put(orig);
+	lxc_storage_put(c->lxc_conf);
 
 	return NULL;
 }
@@ -536,14 +539,15 @@ on_error_put_orig:
  * @specs: details about the backing store to create, like fstype
  */
 struct lxc_storage *storage_create(const char *dest, const char *type,
-				   const char *cname, struct bdev_specs *specs)
+				   const char *cname, struct bdev_specs *specs,
+				   const struct lxc_conf *conf)
 {
 	int ret;
 	struct lxc_storage *bdev;
 	char *best_options[] = {"btrfs", "zfs", "lvm", "dir", "rbd", NULL};
 
 	if (!type)
-		return do_storage_create(dest, "dir", cname, specs);
+		return do_storage_create(dest, "dir", cname, specs, conf);
 
 	ret = strcmp(type, "best");
 	if (ret == 0) {
@@ -552,7 +556,7 @@ struct lxc_storage *storage_create(const char *dest, const char *type,
 		 * opinionated preferences.
 		 */
 		for (i = 0; best_options[i]; i++) {
-			bdev = do_storage_create(dest, best_options[i], cname, specs);
+			bdev = do_storage_create(dest, best_options[i], cname, specs, conf);
 			if (bdev)
 				return bdev;
 		}
@@ -562,20 +566,18 @@ struct lxc_storage *storage_create(const char *dest, const char *type,
 
 	/* -B lvm,dir */
 	if (strchr(type, ',')) {
-		char *dup, *token;
-		char *saveptr = NULL;
+		__do_free char *dup = NULL;
+		char *token;
 
-		dup = alloca(strlen(type) + 1);
-		strcpy(dup, type);
-		for (token = strtok_r(dup, ",", &saveptr); token;
-		     token = strtok_r(NULL, ",", &saveptr)) {
-			bdev = do_storage_create(dest, token, cname, specs);
+		dup = must_copy_string(type);
+		lxc_iterate_parts(token, dup, ",") {
+			bdev = do_storage_create(dest, token, cname, specs, conf);
 			if (bdev)
 				return bdev;
 		}
 	}
 
-	return do_storage_create(dest, type, cname, specs);
+	return do_storage_create(dest, type, cname, specs, conf);
 }
 
 bool storage_destroy(struct lxc_conf *conf)
@@ -602,7 +604,7 @@ struct lxc_storage *storage_init(struct lxc_conf *conf)
 	const struct lxc_storage_type *q;
 	const char *src = conf->rootfs.path;
 	const char *dst = conf->rootfs.mount;
-	const char *mntopts = conf->rootfs.options;
+	const char *mntopts = conf->rootfs.mnt_opts.raw_options;
 
 	BUILD_BUG_ON(LXC_STORAGE_INTERNAL_OVERLAY_RESTORE <= LXC_CLONE_MAXFLAGS);
 
@@ -613,14 +615,13 @@ struct lxc_storage *storage_init(struct lxc_conf *conf)
 	if (!q)
 		return NULL;
 
-	bdev = malloc(sizeof(struct lxc_storage));
+	bdev = zalloc(sizeof(struct lxc_storage));
 	if (!bdev)
 		return NULL;
 
-	memset(bdev, 0, sizeof(struct lxc_storage));
-
-	bdev->ops = q->ops;
-	bdev->type = q->name;
+	bdev->ops	= q->ops;
+	bdev->type	= q->name;
+	bdev->rootfs	= &conf->rootfs;
 
 	if (mntopts)
 		bdev->mntopts = strdup(mntopts);
@@ -637,10 +638,10 @@ struct lxc_storage *storage_init(struct lxc_conf *conf)
 	return bdev;
 }
 
-bool storage_is_dir(struct lxc_conf *conf)
+bool storage_lxc_is_dir(struct lxc_conf *conf)
 {
 	struct lxc_storage *orig;
-	char *type = conf->rootfs.bdev_type;
+	const char *type = conf->rootfs.__bdev_type;
 	bool bret = false;
 
 	if (type)
@@ -659,10 +660,12 @@ bool storage_is_dir(struct lxc_conf *conf)
 
 void storage_put(struct lxc_storage *bdev)
 {
-	free(bdev->mntopts);
-	free(bdev->src);
-	free(bdev->dest);
-	free(bdev);
+	if (bdev) {
+		free_disarm(bdev->mntopts);
+		free_disarm(bdev->src);
+		free_disarm(bdev->dest);
+		free_disarm(bdev);
+	}
 }
 
 bool rootfs_is_blockdev(struct lxc_conf *conf)

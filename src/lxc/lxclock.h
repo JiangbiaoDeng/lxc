@@ -1,34 +1,31 @@
-/*! \file
- *
- * liblxcapi
- *
- * Copyright © 2012 Serge Hallyn <serge.hallyn@ubuntu.com>.
- * Copyright © 2012 Canonical Ltd.
- *
- *  This library is free software; you can redistribute it and/or
- *  modify it under the terms of the GNU Lesser General Public
- *  License as published by the Free Software Foundation; either
- *  version 2.1 of the License, or (at your option) any later version.
- *
- *  This library is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- *  Lesser General Public License for more details.
- *
- *  You should have received a copy of the GNU Lesser General Public
- *  License along with this library; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
 #ifndef __LXC_LXCLOCK_H
 #define __LXC_LXCLOCK_H
 
-#include <fcntl.h>           /* For O_* constants */
-#include <sys/stat.h>        /* For mode constants */
-#include <sys/file.h>
+#include "config.h"
+
+#include <fcntl.h>
 #include <semaphore.h>
 #include <string.h>
+#include <sys/file.h>
+#include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
+
+#include "compiler.h"
+
+#ifndef F_OFD_GETLK
+#define F_OFD_GETLK	36
+#endif
+
+#ifndef F_OFD_SETLK
+#define F_OFD_SETLK	37
+#endif
+
+#ifndef F_OFD_SETLKW
+#define F_OFD_SETLKW	38
+#endif
 
 #define LXC_LOCK_ANON_SEM 1 /*!< Anonymous semaphore lock */
 #define LXC_LOCK_FLOCK    2 /*!< flock(2) lock */
@@ -78,7 +75,7 @@ struct lxc_lock {
  * freed when the container is freed), and \c u.f.fd = -1.
  *
  */
-extern struct lxc_lock *lxc_newlock(const char *lxcpath, const char *name);
+__hidden extern struct lxc_lock *lxc_newlock(const char *lxcpath, const char *name);
 
 /*!
  * \brief Take an existing lock.
@@ -96,7 +93,7 @@ extern struct lxc_lock *lxc_newlock(const char *lxcpath, const char *name);
  * (except in the test case) I may remove the support for it in sem as
  * well.
  */
-extern int lxclock(struct lxc_lock *lock, int timeout);
+__hidden extern int lxclock(struct lxc_lock *lock, int timeout);
 
 /*!
  * \brief Unlock specified lock previously locked using \ref lxclock().
@@ -106,24 +103,24 @@ extern int lxclock(struct lxc_lock *lock, int timeout);
  * \return \c 0 on success, \c -2 if provided lock was not already held,
  * otherwise \c -1 with \c errno saved from \c fcntl(2) or sem_post function.
  */
-extern int lxcunlock(struct lxc_lock *lock);
+__hidden extern int lxcunlock(struct lxc_lock *lock);
 
 /*!
  * \brief Free a lock created by \ref lxc_newlock().
  *
  * \param lock Lock.
  */
-extern void lxc_putlock(struct lxc_lock *lock);
+__hidden extern void lxc_putlock(struct lxc_lock *lock);
 
 /*!
  * \brief Lock the current process.
  */
-extern void process_lock(void);
+__hidden extern void process_lock(void);
 
 /*!
  * \brief Unlock the current process.
  */
-extern void process_unlock(void);
+__hidden extern void process_unlock(void);
 
 struct lxc_container;
 
@@ -134,14 +131,14 @@ struct lxc_container;
  *
  * \return As for \ref lxclock().
  */
-extern int container_mem_lock(struct lxc_container *c);
+__hidden extern int container_mem_lock(struct lxc_container *c);
 
 /*!
  * \brief Unlock the containers memory.
  *
  * \param c Container.
  */
-extern void container_mem_unlock(struct lxc_container *c);
+__hidden extern void container_mem_unlock(struct lxc_container *c);
 
 /*!
  * \brief Lock the containers disk data.
@@ -151,7 +148,7 @@ extern void container_mem_unlock(struct lxc_container *c);
  * \return \c 0 on success, or an \ref lxclock() error return
  * values on error.
  */
-extern int container_disk_lock(struct lxc_container *c);
+__hidden extern int container_disk_lock(struct lxc_container *c);
 
 /*!
  * \brief Unlock the containers disk data.
@@ -159,6 +156,6 @@ extern int container_disk_lock(struct lxc_container *c);
  * \param c Container.
  *
  */
-extern void container_disk_unlock(struct lxc_container *c);
+__hidden extern void container_disk_unlock(struct lxc_container *c);
 
 #endif

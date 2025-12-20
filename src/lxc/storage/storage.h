@@ -1,40 +1,18 @@
-/*
- * lxc: linux Container library
- *
- * (C) Copyright IBM Corp. 2007, 2008
- *
- * Authors:
- * Daniel Lezcano <daniel.lezcano at free.fr>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
 #ifndef __LXC_STORAGE_H
 #define __LXC_STORAGE_H
 
 #include "config.h"
+
+#include <mntent.h>
 #include <stdint.h>
 #include <sys/mount.h>
 
-#include <lxc/lxccontainer.h>
+#include "lxc.h"
 
-#if IS_BIONIC
-#include <../include/lxcmntent.h>
-#else
-#include <mntent.h>
-#endif
+#include "compiler.h"
+#include "conf.h"
 
 #ifndef MS_DIRSYNC
 #define MS_DIRSYNC 128
@@ -76,7 +54,7 @@ struct lxc_storage_ops {
 	int (*umount)(struct lxc_storage *bdev);
 	int (*destroy)(struct lxc_storage *bdev);
 	int (*create)(struct lxc_storage *bdev, const char *dest, const char *n,
-		      struct bdev_specs *specs);
+		      struct bdev_specs *specs, const struct lxc_conf *conf);
 	/* given original mount, rename the paths for cloned container */
 	int (*clone_paths)(struct lxc_storage *orig, struct lxc_storage *new,
 			   const char *oldname, const char *cname,
@@ -107,36 +85,34 @@ struct lxc_storage {
 	/* index for the connected nbd device. */
 	int nbd_idx;
 	int flags;
+	struct lxc_rootfs *rootfs;
 };
 
 /**
- * storage_is_dir : Check whether the roots is a directory. This function will
+ * storage_lxc_is_dir : Check whether the roots is a directory. This function will
  *                  trust the config file. If the config file key
  *                  lxc.rootfs.path is set to <storage type>:<container path>
  *                  the confile parser will have split this into <storage type>
- *                  and <container path> and set the <bdev_type> member in the
+ *                  and <container path> and set the <__bdev_type> member in the
  *                  lxc_rootfs struct to <storage type> and the <path> member
  *                  will be set to a clean <container path> without the <storage
  *                  type> prefix. This is the new, clean way of handling storage
  *                  type specifications.  If the <storage type> prefix is not
  *                  detected liblxc will try to detect the storage type.
  */
-extern bool storage_is_dir(struct lxc_conf *conf);
-extern bool storage_can_backup(struct lxc_conf *conf);
-
-extern struct lxc_storage *storage_init(struct lxc_conf *conf);
-
-extern struct lxc_storage *storage_copy(struct lxc_container *c,
-					const char *cname, const char *lxcpath,
-					const char *bdevtype, int flags,
-					const char *bdevdata, uint64_t newsize,
-					bool *needs_rdep);
-extern struct lxc_storage *storage_create(const char *dest, const char *type,
-					  const char *cname,
-					  struct bdev_specs *specs);
-extern void storage_put(struct lxc_storage *bdev);
-extern bool storage_destroy(struct lxc_conf *conf);
-extern bool rootfs_is_blockdev(struct lxc_conf *conf);
-extern const char *lxc_storage_get_path(char *src, const char *prefix);
+__hidden extern bool storage_lxc_is_dir(struct lxc_conf *conf);
+__hidden extern bool storage_can_backup(struct lxc_conf *conf);
+__hidden extern struct lxc_storage *storage_init(struct lxc_conf *conf);
+__hidden extern struct lxc_storage *storage_copy(struct lxc_container *c, const char *cname,
+						 const char *lxcpath, const char *bdevtype,
+						 int flags, const char *bdevdata, uint64_t newsize,
+						 bool *needs_rdep);
+__hidden extern struct lxc_storage *storage_create(const char *dest, const char *type,
+						   const char *cname, struct bdev_specs *specs,
+						   const struct lxc_conf *conf);
+__hidden extern void storage_put(struct lxc_storage *bdev);
+__hidden extern bool storage_destroy(struct lxc_conf *conf);
+__hidden extern bool rootfs_is_blockdev(struct lxc_conf *conf);
+__hidden extern const char *lxc_storage_get_path(char *src, const char *prefix);
 
 #endif /* #define __LXC_STORAGE_H */

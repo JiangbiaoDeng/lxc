@@ -1,54 +1,42 @@
-/*
- * lxc: linux Container library
- *
- * Copyright © 2017 Canonical Ltd.
- *
- * Authors:
- * Christian Brauner <christian.brauner@ubuntu.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
 #ifndef __LXC_STORAGE_UTILS_H
 #define __LXC_STORAGE_UTILS_H
 
 #include "config.h"
-#include <stdio.h>
+
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
+#include <stdio.h>
 
+#include "compiler.h"
 #include "conf.h"
+#include "macro.h"
+
+#define LXC_OVERLAY_PRIVATE_DIR "overlay"
+#define LXC_OVERLAY_DELTA_DIR "delta"
+#define LXC_OVERLAY_WORK_DIR "work"
+#define LXC_OVERLAY_DELTA_PATH LXC_OVERLAY_PRIVATE_DIR "/" LXC_OVERLAY_DELTA_DIR
+#define LXC_OVERLAY_WORK_PATH LXC_OVERLAY_PRIVATE_DIR "/" LXC_OVERLAY_WORK_DIR
+#define LXC_OVERLAY_PATH_LEN \
+	(STRLITERALLEN(LXC_OVERLAY_PRIVATE_DIR) + STRLITERALLEN("/") + 256 + 1)
 
 struct lxc_storage;
 struct lxc_conf;
 
-extern char *dir_new_path(char *src, const char *oldname, const char *name,
-			  const char *oldpath, const char *lxcpath);
-extern bool attach_block_device(struct lxc_conf *conf);
-extern void detach_block_device(struct lxc_conf *conf);
-extern int blk_getsize(struct lxc_storage *bdev, uint64_t *size);
-extern int detect_fs(struct lxc_storage *bdev, char *type, int len);
-extern int do_mkfs_exec_wrapper(void *args);
-extern int is_blktype(struct lxc_storage *b);
-extern int mount_unknown_fs(const char *rootfs, const char *target,
-			    const char *options);
-extern int find_fstype_cb(char *buffer, void *data);
-extern const char *linkderef(const char *path, char *dest);
-extern bool unpriv_snap_allowed(struct lxc_storage *b, const char *t, bool snap,
-				bool maybesnap);
-extern bool is_valid_storage_type(const char *type);
-extern int storage_destroy_wrapper(void *data);
+__hidden extern bool attach_block_device(struct lxc_conf *conf);
+__hidden extern void detach_block_device(struct lxc_conf *conf);
+__hidden extern int blk_getsize(struct lxc_storage *bdev, uint64_t *size);
+__hidden extern int detect_fs(struct lxc_storage *bdev, char *type, int len);
+__hidden extern int do_mkfs_exec_wrapper(void *args);
+__hidden extern int is_blktype(struct lxc_storage *b);
+__hidden extern int mount_unknown_fs(const char *rootfs, const char *target, const char *options);
+__hidden extern int find_fstype_cb(char *buffer, void *data);
+__hidden extern const char *linkderef(const char *path, char *dest);
+__hidden extern bool unpriv_snap_allowed(struct lxc_storage *b, const char *t, bool snap,
+					 bool maybesnap);
+extern bool lxc_is_valid_storage_type(const char *type);
+__hidden extern int storage_destroy_wrapper(void *data);
 
 #endif /* __LXC_STORAGE_UTILS_H */

@@ -1,32 +1,13 @@
-/*! \file
- *
- * liblxcapi
- *
- * Copyright © 2012 Serge Hallyn <serge.hallyn@ubuntu.com>.
- * Copyright © 2012 Canonical Ltd.
- *
- *  This library is free software; you can redistribute it and/or
- *  modify it under the terms of the GNU Lesser General Public
- *  License as published by the Free Software Foundation; either
- *  version 2.1 of the License, or (at your option) any later version.
-
- *  This library is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- *  Lesser General Public License for more details.
-
- *  You should have received a copy of the GNU Lesser General Public
- *  License along with this library; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
 #ifndef __LXC_CONTAINER_H
 #define __LXC_CONTAINER_H
+
 #include <malloc.h>
 #include <semaphore.h>
 #include <stdbool.h>
-#include <stdlib.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include <lxc/attach_options.h>
 
@@ -40,8 +21,10 @@ extern "C" {
 #define LXC_CLONE_KEEPBDEVTYPE    (1 << 3) /*!< Use the same bdev type */
 #define LXC_CLONE_MAYBE_SNAPSHOT  (1 << 4) /*!< Snapshot only if bdev supports it, else copy */
 #define LXC_CLONE_MAXFLAGS        (1 << 5) /*!< Number of \c LXC_CLONE_* flags */
+#define LXC_CLONE_ALLOW_RUNNING   (1 << 6) /*!< allow snapshot creation even if source container is running */
 #define LXC_CREATE_QUIET          (1 << 0) /*!< Redirect \c stdin to \c /dev/zero and \c stdout and \c stderr to \c /dev/null */
 #define LXC_CREATE_MAXFLAGS       (1 << 1) /*!< Number of \c LXC_CREATE* flags */
+#define LXC_MOUNT_API_V1		   1
 
 struct bdev_specs;
 
@@ -52,6 +35,10 @@ struct lxc_lock;
 struct migrate_opts;
 
 struct lxc_console_log;
+
+struct lxc_mount {
+	int version;
+};
 
 /*!
  * An LXC container.
@@ -103,7 +90,7 @@ struct lxc_container {
 	 * \private
 	 * Container configuration.
 	 *
-	 * \internal FIXME: do we want the whole lxc_handler?
+	 * \internal TODO: do we want the whole lxc_handler?
 	 */
 	struct lxc_conf *lxc_conf;
 
@@ -236,7 +223,8 @@ struct lxc_container {
 
 	/*!
 	 * \brief Change whether the container wishes all file descriptors
-	 *  to be closed on startup.
+	 *  to be closed on startup. The LISTEN_FDS environment variable
+	 *  can be set to keep inherited file descriptors open.
 	 *
 	 * \param c Container.
 	 * \param state Value for the close_all_fds bit (0 or 1).
@@ -293,7 +281,7 @@ struct lxc_container {
 	bool (*destroy)(struct lxc_container *c);
 
 	/*!
-	 * \brief Save configuaration to a file.
+	 * \brief Save configuration to a file.
 	 *
 	 * \param c Container.
 	 * \param alt_file Full path to file to save configuration in.
@@ -508,7 +496,7 @@ struct lxc_container {
 	bool (*set_cgroup_item)(struct lxc_container *c, const char *subsys, const char *value);
 
 	/*!
-	 * \brief Determine full path to the containers configuration file.
+	 * \brief Determine full path to the containers configuration directory.
 	 * Each container can have a custom configuration path. However
 	 * by default it will be set to either the \c LXCPATH configure
 	 * variable, or the lxcpath value in the \c LXC_GLOBAL_CONF configuration
@@ -518,19 +506,17 @@ struct lxc_container {
 	 *
 	 * \param c Container.
 	 *
-	 * \return Static string representing full path to configuration
-	 * file.
+	 * \return Static string representing full path to configuration directory.
 	 *
 	 * \note Returned string must not be freed.
 	 */
 	const char *(*get_config_path)(struct lxc_container *c);
 
 	/*!
-	 * \brief Set the full path to the containers configuration
-	 * file.
+	 * \brief Set the full path to the containers configuration directory.
 	 *
 	 * \param c Container.
-	 * \param path Full path to configuration file.
+	 * \param path Full path to configuration directory.
 	 *
 	 * \return \c true on success, else \c false.
 	 */
@@ -576,7 +562,7 @@ struct lxc_container {
 	 * \param c Container.
 	 * \param[in,out] ttynum Terminal number to attempt to allocate,
 	 *  or \c -1 to allocate the first available tty.
-	 * \param[out] masterfd File descriptor referring to the master side of the pty.
+	 * \param[out] ptxfd File descriptor referring to the ptx side of the pty.
 	 *
 	 * \return tty file descriptor number on success, or \c -1 on
 	 *  failure.
@@ -588,7 +574,7 @@ struct lxc_container {
 	 *  descriptor when no longer required so that it may be allocated
 	 *  by another caller.
 	 */
-	int (*console_getfd)(struct lxc_container *c, int *ttynum, int *masterfd);
+	int (*console_getfd)(struct lxc_container *c, int *ttynum, int *ptxfd);
 
 	/*!
 	 * \brief Allocate and run a console tty.
@@ -818,7 +804,7 @@ struct lxc_container {
 	/*!
 	 * \brief An API call to perform various migration operations
 	 *
-	 * \param cmd One of the MIGRATE_ contstants.
+	 * \param cmd One of the MIGRATE_ constants.
 	 * \param opts A migrate_opts struct filled with relevant options.
 	 * \param size The size of the migrate_opts struct, i.e. sizeof(struct migrate_opts).
 	 *
@@ -846,6 +832,73 @@ struct lxc_container {
 	 * \return \c true if the container was rebooted successfully, else \c false.
 	 */
 	bool (*reboot2)(struct lxc_container *c, int timeout);
+
+	/*!
+	 * \brief Mount the host's path `source` onto the container's path `target`.
+	 */
+	int (*mount)(struct lxc_container *c, const char *source,
+		     const char *target, const char *filesystemtype,
+		     unsigned long mountflags, const void *data,
+		     struct lxc_mount *mnt);
+
+	/*!
+	 * \brief Unmount the container's path `target`.
+	 */
+	int (*umount)(struct lxc_container *c, const char *target,
+		      unsigned long mountflags, struct lxc_mount *mnt);
+
+	/*!
+	 * \brief Retrieve a file descriptor for the container's seccomp filter.
+	 *
+	 * \param c Container
+	 *
+	 * \return file descriptor for container's seccomp filter
+	 */
+	int (*seccomp_notify_fd)(struct lxc_container *c);
+
+	/*!
+	 * \brief Retrieve a file descriptor for the running container's seccomp filter.
+	 *
+	 * \param c Container
+	 *
+	 * \return file descriptor for the running container's seccomp filter
+	 */
+	int (*seccomp_notify_fd_active)(struct lxc_container *c);
+
+	/*!
+	 * \brief Retrieve a pidfd for the container's init process.
+	 *
+	 * \param c Container.
+	 *
+	 * \return pidfd of init process of the container.
+	 */
+	int (*init_pidfd)(struct lxc_container *c);
+
+	/*!
+	 * \brief Retrieve a mount fd for the container's devpts instance.
+	 *
+	 * \param c Container.
+	 *
+	 * \return Mount fd of the container's devpts instance.
+	 */
+	int (*devpts_fd)(struct lxc_container *c);
+
+	/*!
+	 * \private
+	 * SO_RCVTIMEO for LXC client_fd socket.
+	 */
+	int rcv_timeout;
+
+	/*!
+	 * \brief Set response receive timeout for LXC commands
+	 *
+	 * \param c Container
+	 * \param timeout Seconds to wait before returning false.
+	 *  (-1 to wait forever).
+	 *
+	 * \return \c true on success, else \c false.
+	 */
+	bool (*set_timeout)(struct lxc_container *c, int timeout);
 };
 
 /*!
@@ -883,6 +936,7 @@ struct bdev_specs {
 	struct {
 		char *rbdname; /*!< RBD image name */
 		char *rbdpool; /*!< Ceph pool name */
+		char *rbduser; /*!< Ceph user name*/
 	} rbd;
 };
 
@@ -1103,6 +1157,13 @@ void lxc_log_close(void);
  * \param key Configuration item to check for.
  */
 bool lxc_config_item_is_supported(const char *key);
+
+/*!
+ * \brief Check if an API extension is supported by this LXC instance.
+ *
+ * \param extension API extension to check for.
+ */
+bool lxc_has_api_extension(const char *extension);
 
 #ifdef  __cplusplus
 }

@@ -1,30 +1,4 @@
-<!--
-
-lxc: linux Container library
-
-(C) Copyright IBM Corp. 2007, 2008
-
-Authors:
-Daniel Lezcano <daniel.lezcano at free.fr>
-
-This library is free software; you can redistribute it and/or
-modify it under the terms of the GNU Lesser General Public
-License as published by the Free Software Foundation; either
-version 2.1 of the License, or (at your option) any later version.
-
-This library is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public
-License along with this library; if not, write to the Free Software
-Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
-
-Translated into Japanese
-by KATOH Yasufumi <karma at jazz.email.ne.jp>
-
--->
+<!-- SPDX-License-Identifier: LGPL-2.1+ -->
 
 <!DOCTYPE refentry PUBLIC @docdtd@ [
 
@@ -446,6 +420,42 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
     </refsect2>
 
     <refsect2>
+      <title><!-- Core Scheduling -->コアスケジューリング</title>
+      <para>
+        <!--
+        Core scheduling defines if the container payload
+        is marked as being schedulable on the same core. Doing so will cause
+        the kernel scheduler to ensure that tasks that are not in the same
+        group never run simultaneously on a core. This can serve as an extra
+        security measure to prevent the container payload from using
+        cross hyper thread attacks.
+        -->
+        コアスケジューリングは、コンテナのペイロードが同じコアでスケジュール可能であるとマークするかどうかを指定します。
+        これによりカーネルスケジューラーは、同じグループに属さないタスクが同一コア上で同時に実行されないようにします。
+        これは、コンテナペイロードがクロスハイパースレッド攻撃を受けることを防ぐための、追加のセキュリティ対策として機能させることができます。
+      </para>
+      <variablelist>
+        <varlistentry>
+          <term>
+            <option>lxc.sched.core</option>
+          </term>
+          <listitem>
+            <para>
+              <!--
+              The only allowed values are 0 and 1. Set this to 1 to create a
+              core scheduling domain for the container or 0 to not create one.
+              If not set explicitly no core scheduling domain will be created
+              for the container.
+                -->
+              0 または 1 のみ指定できます。1 を設定すると、コンテナに対するコアスケジューリングドメインを作成し、0 を設定すると作成しません。
+              明示的に指定していない場合は、コンテナに対するコアスケジューリングドメインは作成されません。
+            </para>
+          </listitem>
+        </varlistentry>
+      </variablelist>
+    </refsect2>
+
+    <refsect2>
       <title>Proc</title>
       <para>
         <!--
@@ -543,6 +553,7 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               <!--
               specify what kind of network virtualization to be used
               for the container.
+              Must be specified before any other option(s) on the net device.
               Multiple networks can be specified by using an additional index
               <option>i</option>
               after all <option>lxc.net.*</option> keys. For example,
@@ -554,23 +565,10 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               will belong to <option>lxc.net.0.type</option>.
               Currently, the different virtualization types can be:
               -->
-              コンテナがどの種類のネットワーク仮想化を使うかを指定します。すべての <option>lxc.net.*</option> キーに、追加のインデックス <option>i</option> を使うと、複数のネットワークを指定できます。例えば、<option>lxc.net.0.type = veth</option> と <option>lxc.net.1.type = veth</option> は、同じタイプの異なるネットワークを 2 つ指定します。
+              コンテナがどの種類のネットワーク仮想化を使うかを指定します。ネットワークデバイスの他のオプションを設定する前に指定しなければいけません。
+              すべての <option>lxc.net.*</option> キーに、追加のインデックス <option>i</option> を使うと、複数のネットワークを指定できます。例えば、<option>lxc.net.0.type = veth</option> と <option>lxc.net.1.type = veth</option> は、同じタイプの異なるネットワークを 2 つ指定します。
               同じインデックスを指定したキーはすべて同じネットワークの指定になります。例えば、<option>lxc.net.0.link = br0</option> は <option>lxc.net.0.type</option> と同じネットワークの設定になります。
               現時点では、以下のネットワーク仮想化のタイプが使えます:
-            </para>
-
-            <para>
-              <!--
-              <option>none:</option> will cause the container to share
-              the host's network namespace.  This means the host
-              network devices are usable in the container.  It also
-              means that if both the container and host have upstart as
-              init, 'halt' in a container (for instance) will shut down the
-              host.
-              -->
-              <option>none:</option> ホストのネットワーク名前空間を共有します。
-              これにより、ホストのネットワークデバイスをコンテナ内で使うことが可能になります。
-              もしコンテナもホストも init として upstart を使っている場合、(例えば) コンテナ内で 'halt' を実行すると、ホストがシャットダウンしてしまうことにもなります。
             </para>
 
             <para>
@@ -585,14 +583,23 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               <!--
               <option>veth:</option> a virtual ethernet pair
               device is created with one side assigned to the container
-              and the other side attached to a bridge specified by
+              and the other side on the host.
+              <option>lxc.net.[i].veth.mode</option> specifies the
+              mode the veth parent will use on the host.
+              The accepted  modes are <option>bridge</option> and <option>router</option>.
+              The mode defaults to bridge if not specified.
+              In <option>bridge</option> mode the host side is attached to a bridge specified by
               the <option>lxc.net.[i].link</option> option.
-              If the bridge is not specified, then the veth pair device
+              If the bridge link is not specified, then the veth pair device
               will be created but not attached to any bridge.
               Otherwise, the bridge has to be created on the system
               before starting the container.
               <command>lxc</command> won't handle any
               configuration outside of the container.
+              In <option>router</option> mode static routes are created on the host for the
+              container's IP addresses pointing to the host side veth interface.
+              Additionally Proxy ARP and Proxy NDP entries are added on the host side veth interface
+              for the gateway IPs defined in the container to allow the container to reach the host.
               By default, <command>lxc</command> chooses a name for the
               network device belonging to the outside of the
               container, but if you wish to handle
@@ -601,13 +608,37 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               the <option>lxc.net.[i].veth.pair</option> option (except for
               unprivileged containers where this option is ignored for security
               reasons).
+
+              Static routes can be added on the host pointing to the container using the
+              <option>lxc.net.[i].veth.ipv4.route</option> and
+              <option>lxc.net.[i].veth.ipv6.route</option> options.
+              Several lines specify several routes.
+              The route is in format x.y.z.t/m, eg. 192.168.1.0/24.
+
+              In <option>bridge</option> mode untagged VLAN membership can be set with the
+              <option>lxc.net.[i].veth.vlan.id</option> option. It accepts a special value of 'none' indicating
+              that the container port should be removed from the bridge's default untagged VLAN.
+              The <option>lxc.net.[i].veth.vlan.tagged.id</option> option can be specified multiple times to set
+              the container's bridge port membership to one or more tagged VLANs.
               -->
-              <option>veth:</option > 一方がコンテナに、もう一方が <option>lxc.net.[i].link</option> オプションで指定されたブリッジに接続されるペアの仮想イーサネットデバイスを作成します。
+              <option>veth:</option> 一方がコンテナに、もう一方がホストに接続されるペアの仮想イーサネットデバイスを作成します。
+              <option>lxc.net.[i].veth.mode</option> は、veth の親（ホスト側）がホスト上で使うモードを指定します。
+              指定できるモードは <option>bridge</option> と <option>router</option> です。
+              指定しない場合のデフォルトのモードは bridge です。
+              <option>bridge</option> モードでは、ホスト側は、<option>lxc.net.[i].link</option> オプションで指定したブリッジに接続されます。
               もし、ブリッジが指定されていない場合、veth ペアデバイスは作成されますが、ブリッジには接続されません。
               ブリッジはコンテナが開始する前にシステムで事前に設定しておく必要があります。
               <command>lxc</command> はコンテナ外の設定を扱うことはありません。
+              <option>router</option> モードでは、ホスト側の veth インターフェースを指すコンテナの IP アドレスに対して、ホスト上でスタティックルートが作成されます。
+              加えて、コンテナがホストに到達できるために、コンテナ内で定義されたゲートウェイの IP アドレスに対して、Proxy ARP と Proxy NDP エントリがホスト側の veth インターフェースに追加されます。
               デフォルトでは、<command>lxc</command> がコンテナの外部に属するネットワークデバイスに対する名前を決定します。
               しかし、もしこの名前を自分で指定したい場合、<option>lxc.net.[i].veth.pair</option> オプションを使って名前を設定し、lxc に対して指定をすることができます (非特権コンテナの場合をのぞきます。セキュリティ上の理由からこのオプションは無視されます)。
+
+              <option>lxc.net.[i].veth.ipv4.route</option>、<option>lxc.net.[i].veth.ipv6.route</option> オプションを使って、静的ルーティングをコンテナを指し示すホスト上に追加できます。
+              複数のルートがある場合は複数の設定を指定します。
+              ルートは x.y.z.t/m の形式です。例: 192.168.1.0/24
+
+	      <option>bridge</option> モードでは、タグなし VLAN は <option>lxc.net.[i].veth.vlan.id</option> で設定できます。このオプションでは、コンテナポートをブリッジのデフォルトのタグなし VLAN から削除するための特別な値 'none' が指定できます。コンテナのブリッジポートを複数のタグ付き VLAN に所属させるために、<option>lxc.net.[i].veth.vlan.tagged.id</option> を複数回指定できます。
             </para>
 
             <para>
@@ -658,7 +689,7 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               mode is possible for one physical interface.
               -->
               <option>macvlan:</option> macvlan インターフェースは <option>lxc.net.[i].link</option> により指定されるインターフェースとリンクし、コンテナに割り当てられます。
-              <option>lxc.net.[i].macvlan.mode</option> でモードを指定すると、その macvlan の指定を、同じ上位デバイスで異なる macvlan の間の通信をする時に使います。
+              <option>lxc.net.[i].macvlan.mode</option> でモードを指定すると、その macvlan の指定を、同じ上位デバイスで異なる macvlan 間の通信をする時に使います。
               指定できるモードは <option>private</option>、<option>vepa</option>、<option>bridge</option>、<option>passthru</option> のいずれかです。
               <option>private</option> モードの場合、デバイスは同じ上位デバイスの他のデバイスとの通信を行いません (デフォルト)。
               新しい仮想イーサネットポート集約モード (Virtual Ethernet Port Aggregator (VEPA)) である <option>vepa</option> モードの場合、隣接したポートが、ソースとデスティネーションの両方が macvlan ポートに対してローカルであるフレームを全て返すと仮定します。
@@ -671,6 +702,58 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               しかし、reflective relay からフレームが返ってきたときは、再度それを配送することはしません。
               全ての MAC アドレスを知っているので、ブリッジモジュールのように、macvlan ブリッジモードは学習や STP の必要はありません。
               <option>passthru</option> モードの場合、物理インターフェースで受け取った全てのフレームは macvlan インターフェースに転送されます。<option>passthru</option> モードの場合、ひとつの macvlan インターフェースだけが、ひとつの物理インターフェースに対して設定できます。
+            </para>
+
+            <para>
+              <!--
+              <option>ipvlan:</option> an ipvlan interface is linked
+              with the interface specified by
+              the <option>lxc.net.[i].link</option> and assigned to
+              the container.
+              <option>lxc.net.[i].ipvlan.mode</option> specifies the
+              mode the ipvlan will use to communicate between
+              different ipvlan on the same upper device. The accepted
+              modes are <option>l3</option>, <option>l3s</option> and
+              <option>l2</option>. It defaults to <option>l3</option> mode.
+              In <option>l3</option> mode TX processing up to L3 happens on the stack instance
+              attached to the dependent device and packets are switched to the stack instance of the
+              parent device for the L2 processing and routing from that instance will be
+              used before packets are queued on the outbound device. In this mode the dependent devices
+              will not receive nor can send multicast / broadcast traffic.
+              In <option>l3s</option> mode TX processing is very similar to the L3 mode except that
+              iptables (conn-tracking) works in this mode and hence it is L3-symmetric (L3s).
+              This will have slightly less performance but that shouldn't matter since you are
+              choosing this mode over plain-L3 mode to make conn-tracking work.
+              In <option>l2</option> mode TX processing happens on the stack instance attached to
+              the dependent device and packets are switched and queued to the parent device to send
+              out. In this mode the dependent devices will RX/TX multicast and broadcast (if applicable) as well.
+              <option>lxc.net.[i].ipvlan.isolation</option> specifies the isolation mode.
+              The accepted isolation values are <option>bridge</option>,
+              <option>private</option> and <option>vepa</option>.
+              It defaults to <option>bridge</option>.
+              In <option>bridge</option> isolation mode dependent devices can cross-talk among themselves
+              apart from talking through the parent device.
+              In <option>private</option> isolation mode the port is set in private mode.
+              i.e. port won't allow cross communication between dependent devices.
+              In <option>vepa</option> isolation mode the port is set in VEPA mode.
+              i.e. port will offload switching functionality to the external entity as
+              described in 802.1Qbg.
+              -->
+              <option>ipvlan:</option> ipvlan インターフェースは <option>lxc.net.[i].link</option> により指定されるインターフェースとリンクし、コンテナに割り当てられます。
+              <option>lxc.net.[i].ipvlan.mode</option> でモードを指定すると、その ipvlan の指定を、同じ上位デバイスで異なる ipvlan 間の通信をする時に使います。
+              指定できるモードは <option>l3</option>、<option>l3s</option>、<option>l2</option> で、デフォルトは <option>l3</option> モードです。
+              <option>l3</option> モードでは、L3 までの TX (送信) 処理はスレーブデバイスにアタッチされたスタックインスタンス上で行われます。
+              そしてパケットは、L2 処理のためにマスターデバイスのスタックインスタンスにスイッチされます。このインスタンスからのルーティングは、発信デバイス上でキューに入る前に使われます。
+              このモードでは、スレーブはマルチキャスト・ブロードキャストのトラフィックを受信しませんし、送信もできません。
+              <option>l3s</option> モードは、TX (送信) 処理は L3 モードと非常に似ていますが、iptables (conn-tracking) がこのモードで動作します。
+              それゆえに L3対称 (symmetric) (L3s) です。このモードは若干パフォーマンスが低下しますが、conn-tracking (接続追跡) が動作するように、普通の L3 モードの代わりにこのモードを選んでいるので問題にはならないはずです。
+              <option>l2</option> モードでは、TX (送信) 処理はスレーブデバイスにアタッチされたスタックインスンタンス上で行われます。
+              パケットは送信のため、マスターデバイスにスイッチされ、マスターデバイス上でキューに入ります。このモードでは、スレーブはマルチキャストも（該当する場合）ブロードキャストも RX/TX (送受信) 処理します。
+
+              <option>lxc.net.[i].ipvlan.isolation</option> は隔離モードを指定します。隔離モードには <option>bridge</option>、<option>private</option>、<option>vepa</option> が指定できます。デフォルトは <option>bridge</option> モードです。
+              <option>bridge</option> 隔離モードでは、スレーブはマスターデバイス経由の通信とは別に、スレーブ同士で通信できます。
+              <option>private</option> 隔離モードでは、ポートはプライベートに設定されます。つまり、スレーブ間の通信はできません。
+              <option>vepa</option> 隔離モードでは、ポートは VEPA モードに設定されます。つまり、802.1Qbg で説明されているように、ポートはスイッチング機能を外部エンティティにオフロードします。
             </para>
 
             <para>
@@ -716,6 +799,32 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               -->
               実際のネットワークトラフィックに使うインターフェースを指定します。
             </para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term>
+            <option>lxc.net.[i].l2proxy</option>
+          </term>
+          <listitem>
+            <para>
+              <!--
+              Controls whether layer 2 IP neighbour proxy entries will be added to the
+              lxc.net.[i].link interface for the IP addresses of the container.
+              Can be set to 0 or 1. Defaults to 0.
+              When used with IPv4 addresses, the following sysctl values need to be set:
+              net.ipv4.conf.[link].forwarding=1
+              When used with IPv6 addresses, the following sysctl values need to be set:
+              net.ipv6.conf.[link].proxy_ndp=1
+              net.ipv6.conf.[link].forwarding=1
+                -->
+              レイヤ 2 IP 近隣プロキシエントリを、コンテナの IP アドレスに対応する lxc.net.[i].link インターフェースに追加するかどうかを制御します。0 か 1 が設定でき、デフォルトは 0 です。
+              IPv4 アドレスで使う場合は、次の sysctl 設定が必要です:
+              net.ipv4.conf.[link].forwarding=1
+              IPv6 アドレスで使う場合は、次の sysctl 設定が必要です:
+              net.ipv6.conf.[link].proxy_ndp=1
+              net.ipv6.conf.[link].forwarding=1
+              </para>
           </listitem>
         </varlistentry>
 
@@ -778,8 +887,13 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               Specify the ipv4 address to assign to the virtualized interface.
               Several lines specify several ipv4 addresses. The address is in
               format x.y.z.t/m, eg. 192.168.1.123/24.
+              You can optionally specify the broadcast address after the IP adress,
+              e.g. 192.168.1.123/24 255.255.255.255.
+              Otherwise it is automatically calculated from the IP address.
               -->
               仮想インターフェースに割り当てる ipv4 アドレスを指定します。複数行により複数の ipv4 アドレスを指定します。このアドレスは x.y.z.t/m というフォーマットで指定します。例) 192.168.1.123/24
+              IP アドレスのあとにオプションでブロードキャストアドレスを指定できます。例）192.168.1.123/24 255.255.255.255
+              指定しなければ IP アドレスから自動的に計算されます。
             </para>
           </listitem>
         </varlistentry>
@@ -799,11 +913,15 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               interface (as specified by the
               <option>lxc.net.[i].link</option> option) and use that as
               the gateway. <option>auto</option> is only available when
-              using the <option>veth</option> and
-              <option>macvlan</option> network types.
+              using the <option>veth</option>,
+              <option>macvlan</option> and <option>ipvlan</option> network types.
+              Can also have the special value of <option>dev</option>,
+              which means to set the default gateway as a device route.
+              This is primarily for use with layer 3 network modes, such as IPVLAN.
               -->
               コンテナでゲートウェイとして使う IPv4 アドレスを指定します。アドレスは x.y.z.t というフォーマットです。例) 192.168.1.123
-              <option>auto</option> という特別な値を指定できます。これは (<option>lxc.net.[i].link</option> で指定した) ブリッジインターフェースの最初のアドレスを使用し、それをゲートウェイに使うという意味になります。<option>auto</option> はネットワークタイプとして <option>veth</option> と <option>macvlan</option> を指定している時だけ有効となります。
+              <option>auto</option> という特別な値を指定できます。これは (<option>lxc.net.[i].link</option> で指定した) ブリッジインターフェースの最初のアドレスを使用し、それをゲートウェイに使うという意味になります。<option>auto</option> はネットワークタイプとして <option>veth</option>、<option>macvlan</option>、<option>ipvlan</option> を指定している時だけ有効となります。
+              特別な値である <option>dev</option> も設定できます。これはデバイスのルートとしてデフォルトゲートウェイを設定するという意味です。これは主に、IPVLAN のようなレイヤ 3 のネットワークモードで使用します。
             </para>
           </listitem>
         </varlistentry>
@@ -841,11 +959,15 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               interface (as specified by the
               <option>lxc.net.[i].link</option> option) and use that as
               the gateway. <option>auto</option> is only available when
-              using the <option>veth</option> and
-              <option>macvlan</option> network types.
+              using the <option>veth</option>,
+              <option>macvlan</option> and <option>ipvlan</option> network types.
+              Can also have the special value of <option>dev</option>,
+              which means to set the default gateway as a device route.
+              This is primarily for use with layer 3 network modes, such as IPVLAN.
               -->
               コンテナでゲートウェイとして使う IPv6 アドレスを指定します。アドレスは x::y というフォーマットです。例) 2003:db8:1:0::1
-              <option>auto</option> という特別な値を記述する事も可能です。これは (<option>lxc.net.[i].link</option> で指定した) ブリッジインターフェースの最初のアドレスを使用し、それをゲートウェイに使うという意味になります。<option>auto</option> はネットワークタイプとして <option>veth</option> と <option>macvlan</option> を指定している時だけ有効となります。
+              <option>auto</option> という特別な値を記述する事も可能です。これは (<option>lxc.net.[i].link</option> で指定した) ブリッジインターフェースの最初のアドレスを使用し、それをゲートウェイに使うという意味になります。<option>auto</option> はネットワークタイプとして <option>veth</option>、<option>macvlan</option>、<option>ipvlan</option> を指定している時だけ有効となります。
+              特別な値である <option>dev</option> も設定できます。これはデバイスのルートとしてデフォルトゲートウェイを設定するという意味です。これは主に、IPVLAN のようなレイヤ 3 のネットワークモードで使用します。
             </para>
           </listitem>
         </varlistentry>
@@ -885,8 +1007,8 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
 
                 <listitem>
                  <para>
-                 LXC_NET_TYPE: ネットワークタイプ。有効なネットワークタイプのうちのひとつです (例: 'macvlan', 'veth') <!-- the network type. This is one of the valid
-                 network types listed here (e.g. 'macvlan', 'veth'). -->
+                 LXC_NET_TYPE: ネットワークタイプ。有効なネットワークタイプのうちのひとつです (例: 'vlan', 'macvlan', 'ipvlan', 'veth') <!-- the network type. This is one of the valid
+                 network types listed here (e.g. 'vlan', 'macvlan', 'ipvlan', 'veth'). -->
                   </para>
                 </listitem>
 
@@ -963,9 +1085,9 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
                 </listitem>
 
                 <listitem>
-                 <para>
-                 LXC_NET_TYPE: ネットワークタイプ。有効なネットワークタイプのうちのひとつです (例: 'macvlan', 'veth') <!-- the network type. This is one of the valid
-                 network types listed here (e.g. 'macvlan', 'veth'). -->
+                  <para>
+                 LXC_NET_TYPE: ネットワークタイプ。有効なネットワークタイプのうちのひとつです (例: 'vlan', 'macvlan', 'ipvlan', 'veth') <!-- the network type. This is one of the valid
+                 network types listed here (e.g. 'vlan', 'macvlan', 'ipvlan', 'veth'). -->
                   </para>
                 </listitem>
 
@@ -1030,11 +1152,11 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               <!--
               If set, the container will have a new pseudo tty
               instance, making this private to it. The value specifies
-              the maximum number of pseudo ttys allowed for a pts
+              the maximum number of pseudo ttys allowed for a pty
               instance (this limitation is not implemented yet).
               -->
               もし設定された場合、コンテナは新しい pseudo tty インスタンスを持ち、それを自身のプライベートとします。
-              この値は pts インスタンスに許可される pseudo tty の最大数を指定します (この制限はまだ実装されていません)。
+              この値は pty インスタンスに許可される pseudo tty の最大数を指定します (この制限はまだ実装されていません)。
             </para>
           </listitem>
         </varlistentry>
@@ -1065,23 +1187,25 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
             ringbuffer. Note that ringbuffer must be at least as big as a
             standard page size. When passed a value smaller than a single page
             size liblxc will allocate a ringbuffer of a single page size. A page
-            size is usually 4kB.
+            size is usually 4KB.
                 -->
-              このオプションを設定すると、liblxc はインメモリのリングバッファを割り当てます。コンテナのコンソールはリングバッファに出力されます。リングバッファは少なくとも標準ページサイズの大きさでなければなりません。ページサイズより小さい値を与えた場合は、liblxc  はページサイズのリングバッファを割り当てます。ページサイズは通常は 4kB です。
+              このオプションを設定すると、liblxc はインメモリのリングバッファを割り当てます。コンテナのコンソールはリングバッファに出力されます。リングバッファは少なくとも標準ページサイズの大きさでなければなりません。ページサイズより小さい値を与えた場合は、liblxc  はページサイズのリングバッファを割り当てます。ページサイズは通常は 4KB です。
 
               <!--
             The keyword 'auto' will cause liblxc to allocate a ringbuffer of
-            128kB.
+            128KB.
                 -->
-              'auto' を指定すると、liblxc は 128kB のリングバッファを割り当てます。
+              'auto' を指定すると、liblxc は 128KB のリングバッファを割り当てます。
 
               <!--
             When manually specifying a size for the ringbuffer the value should
             be a power of 2 when converted to bytes. Valid size prefixes are
-            'kB', 'MB', 'GB'. (Note that all conversions are based on multiples
-            of 1024. That means 'kb' == 'KiB', 'MB' == 'MiB', 'GB' == 'GiB'.)
+            'KB', 'MB', 'GB'. (Note that all conversions are based on multiples
+            of 1024. That means 'Kb' == 'KiB', 'MB' == 'MiB', 'GB' == 'GiB'.
+            Additionally, the case of the suffix is ignored, i.e. 'kB', 'KB' and
+            'Kb' are treated equally.)
                 -->
-              リングバッファサイズを数値指定する場合、値がバイトに変換されるときに 2 の累乗になります。サイズ接頭辞付きの単位として 'kB'、'MB'、'GB' が使えます。(この場合の変換は 1024 の倍数に基づいています。つまり 'kB' == 'KiB'、'MB' == 'MiB'、'GB' == 'GiB' という意味です。)
+              リングバッファサイズを数値指定する場合、値がバイトに変換されるときに 2 の累乗になります。サイズ接頭辞付きの単位として 'KB'、'MB'、'GB' が使えます。(この場合の変換は 1024 の倍数に基づいています。つまり 'KB' == 'KiB'、'MB' == 'MiB'、'GB' == 'GiB' という意味です。加えて、単位の大文字小文字は無視されます。すなわち 'kB'、'KB'、'Kb' は同一に扱われます。)
             </para>
           </listitem>
         </varlistentry>
@@ -1098,23 +1222,25 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
             <option>lxc.console.logfile</option>. Note that size of the log file
             must be at least as big as a standard page size. When passed a value
             smaller than a single page size liblxc will set the size of log file
-            to a single page size. A page size is usually 4kB.
+            to a single page size. A page size is usually 4KB.
             -->
-              liblxc は <option>lxc.console.logfile</option> で指定したコンソールログのサイズを、このオプションで設定した値に制限します。ログファイルのサイズは少なくとも標準ページサイズでなければなりません。ページサイズ以下の値を設定した場合は、liblxc はログファイルのサイズをページサイズに設定します。ページサイズは通常は 4kB です。
+              liblxc は <option>lxc.console.logfile</option> で指定したコンソールログのサイズを、このオプションで設定した値に制限します。ログファイルのサイズは少なくとも標準ページサイズでなければなりません。ページサイズ以下の値を設定した場合は、liblxc はログファイルのサイズをページサイズに設定します。ページサイズは通常は 4KB です。
 
               <!--
-            The keyword 'auto' will cause liblxc to place a limit of 128kB on
+            The keyword 'auto' will cause liblxc to place a limit of 128KB on
             the log file.
                 -->
-              'auto' を指定すると、liblxc はログファイルのサイズを 128kB に制限します。
+              'auto' を指定すると、liblxc はログファイルのサイズを 128KB に制限します。
 
               <!--
             When manually specifying a size for the log file the value should
             be a power of 2 when converted to bytes. Valid size prefixes are
-            'kB', 'MB', 'GB'. (Note that all conversions are based on multiples
-            of 1024. That means 'kb' == 'KiB', 'MB' == 'MiB', 'GB' == 'GiB'.)
+            'KB', 'MB', 'GB'. (Note that all conversions are based on multiples
+            of 1024. That means 'KB' == 'KiB', 'MB' == 'MiB', 'GB' == 'GiB'.
+            Additionally, the case of the suffix is ignored, i.e. 'kB', 'KB' and
+            'Kb' are treated equally.)
                 -->
-              ログファイルサイズの値を数値指定する場合、値がバイトに変換されるときに 2 の累乗になります。サイズ接頭辞付きの単位として 'kB'、'MB'、'GB' が使えます。(この場合の変換は 1024 の倍数に基づいています。つまり 'kB' == 'KiB'、'MB' == 'MiB'、'GB' == 'GiB' という意味です。)
+              ログファイルサイズの値を数値指定する場合、値がバイトに変換されるときに 2 の累乗になります。サイズ接頭辞付きの単位として 'kB'、'MB'、'GB' が使えます。(この場合の変換は 1024 の倍数に基づいています。つまり 'kB' == 'KiB'、'MB' == 'MiB'、'GB' == 'GiB' という意味です。加えて、単位の大文字小文字は無視されます。すなわち 'kB'、'KB'、'Kb' は同一に扱われます。)
 
               <!--
             If users want to mirror the console ringbuffer on disk they should set
@@ -1287,7 +1413,8 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
         <filename>/dev</filename> to be set up as needed in the container
         rootfs.  If lxc.autodev is set to 1, then after mounting the container's
         rootfs LXC will mount a fresh tmpfs under <filename>/dev</filename>
-        (limited to 500k) and fill in a minimal set of initial devices.
+        (limited to 500K by default, unless defined in lxc.autodev.tmpfs.size)
+        and fill in a minimal set of initial devices.
         This is generally required when starting a container containing
         a "systemd" based "init" but may be optional at other times.  Additional
         devices in the containers /dev directory may be created through the
@@ -1295,7 +1422,7 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
         -->
         デフォルトでは、lxc はコンテナの <filename>/dev</filename> 以下に fd, stdin, stdout, stderr のシンボリックリンクを作成しますが、自動的にはデバイスノードのエントリは作成しません。
         これは、コンテナの rootfs で必要な設定を行えるようにするものです。
-        lxc.autodev が 1 に設定されている場合、コンテナの rootfs をマウントした後、LXC は新しい tmpfs を <filename>/dev</filename> 以下にマウントします (500k 制限の)。
+        lxc.autodev が 1 に設定されている場合、コンテナの rootfs をマウントした後、LXC は新しい tmpfs を <filename>/dev</filename> 以下にマウントします (デフォルトでは 500k 制限でマウント、lxc.autodev.tmpfs.size で指定可能)。
         そして初期デバイスの最小限のセットを作成します。
         これは、"systemd" ベースの "init" 環境のコンテナを起動する時に通常必要ですが、他の環境の場合はオプショナルなものです。
         コンテナの /dev ディレクトリ内の追加デバイスは <option>lxc.hook.autodev</option> フックを使用して作成されます。
@@ -1312,6 +1439,23 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               <filename>/dev</filename> when starting the container.
               -->
               コンテナの起動時に LXC が /dev をマウントして最小限の /dev を作成するのを止めるには、この値を 0 に設定してください。
+            </para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term>
+            <option>lxc.autodev.tmpfs.size</option>
+          </term>
+          <listitem>
+            <para>
+	      <!--
+              Set this to define the size of the /dev tmpfs.
+              The default value is 500000 (500K). If the parameter is used
+              but without value, the default value is used.
+		-->
+	      この設定で /dev tmpfs のサイズを指定します。
+	      デフォルト値は 500000 (500K) です。このパラメータを値なしで使うと、デフォルト値が使われます。
             </para>
           </listitem>
         </varlistentry>
@@ -1343,7 +1487,7 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
         the container at some <filename>path</filename>, and then mounts
         under <filename>path</filename>, then a TOCTTOU attack would be
         possible where the container user modifies a symbolic link under
-        his home directory at just the right time.
+        their home directory at just the right time.
           -->
         注意: 通常 LXC は、マウント対象と相対パス指定のバインドマウントを、適切にコンテナルート以下に閉じ込めます。
         これは、ホストのディレクトリやファイルに対して重ね合わせを行うようなマウントによる攻撃を防ぎます。(絶対パス指定のマウントソース中の各パスがシンボリックリンクである場合は無視されます。)
@@ -1412,7 +1556,7 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               fstab フォーマットの一行と同じフォーマットのマウントポイントの指定をします。
 
               <!--
-              Moreover lxc supports mount propagation, such as rslave or
+              Moreover lxc supports mount propagation, such as rshared or
               rprivate, and adds three additional mount options.
               <option>optional</option> don't fail if mount does not work.
               <option>create=dir</option> or <option>create=file</option>
@@ -1420,14 +1564,14 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               <option>relative</option> source path is taken to be relative to
               the mounted container root. For instance,
               -->
-              加えて、LXC では rslave や rprivate といったマウント・プロパゲーションオプションと、独自の 3 つのマウントオプションが使えます。
+              加えて、LXC では rshared や rprivate といったマウント・プロパゲーションオプションと、独自の 3 つのマウントオプションが使えます。
               <option>optional</option> は、マウントが失敗しても失敗を返さずに無視します。
               <option>create=dir</option> と <option>create=file</option> は、マウントポイントをマウントする際にディレクトリもしくはファイルを作成します。
               <option>relative</option> を指定すると、マウントされたコンテナルートからの相対パスとして取得されます。
             </para>
-            <screen>
+            <programlisting>
               dev/null proc/kcore none bind,relative 0 0
-            </screen>
+            </programlisting>
             <para>
               <!--
               Will expand dev/null to ${<option>LXC_ROOTFS_MOUNT</option>}/dev/null,
@@ -1855,9 +1999,43 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
           <listitem>
             <para>
               <!--
-              extra mount options to use when mounting the rootfs.
-              -->
-              rootfs をマウントするときに追加したいマウントオプション。
+              Specify extra mount options to use when mounting the rootfs.
+                The format of the mount options corresponds to the
+                format used in fstab. In addition, LXC supports the custom
+                <option>idmap=</option> mount option. This option can be used
+                to tell LXC to create an idmapped mount for the container's
+                rootfs. This is useful when the user doesn't want to recursively
+                chown the rootfs of the container to match the idmapping of the
+                user namespace the container is going to use. Instead an
+                idmapped mount can be used to handle this.
+                The argument for
+                <option>idmap=</option>
+                can either be a path pointing to a user namespace file that
+                LXC will open and use to idmap the rootfs or the special value
+                "container" which will instruct LXC to use
+                the container's user namespace to idmap the rootfs.
+                -->
+                rootfs をマウントするときに使うマウントオプション。マウントオプションのフォーマットは fstab で使うフォーマットと同じです。
+                加えて、LXC では独自の <option>idmap=</option> マウントオプションが使えます。このオプションを使うと、LXC に対してコンテナの rootfs を idmapped マウントするように指示できます。
+                これは、コンテナが使うユーザー名前空間の ID マッピングと一致させるために、コンテナの rootfs を再帰的に chown したくない場合に役に立ちます。代わりに idmapped マウントが使えます。
+                <option>idmap=</option> の引数は、LXC が開いて rootfs を idmap するのに使うユーザー名前空間ファイルを指すパス、もしくは "container" という特別な値のどちらかです。"container" という値は、コンテナのユーザー名前空間を使って rootfs を idmap するように LXC に指示します。
+            </para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term>
+            <option>lxc.rootfs.managed</option>
+          </term>
+          <listitem>
+            <para>
+              <!--
+              Set this to 0 to indicate that LXC is not managing the
+              container storage, then LXC will not modify the
+              container storage. The default is 1.
+                -->
+              LXC がコンテナのストレージを管理していない場合は、この値を 0 に設定します。
+              0 に設定すると、LXC はコンテナのストレージを変更しません。デフォルト値は 1 です。
             </para>
           </listitem>
         </varlistentry>
@@ -1866,7 +2044,7 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
     </refsect2>
 
     <refsect2>
-      <title>Control group</title>
+      <title>Control group ("cgroup")</title>
       <para>
         <!--
         The control group section contains the configuration for the
@@ -1880,10 +2058,281 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
         <command>lxc</command> は、このサブシステム名の正しさはチェックしません。
         実行時のエラーを検出するのに不便ですが、別の将来のサブシステムをサポート出来るという有利な点もあります。
       </para>
+
+      <para>
+        <!--
+        The kernel implementation of cgroups has changed significantly over the
+        years. With Linux 4.5 support for a new cgroup filesystem was added
+        usually referred to as "cgroup2" or "unified hierarchy". Since then the
+        old cgroup filesystem is usually referred to as "cgroup1" or the
+        "legacy hierarchies". Please see the cgroups manual page for a detailed
+        explanation of the differences between the two versions.
+          -->
+        カーネルにおける cgroup 実装は長年にわたって大きく変化してきました。
+        Linux 4.5 で新しい cgroup ファイルシステムのサポートが追加されました。通常は "cgroup2" や "unified hierarchy"（単一階層構造） と呼ばれています。
+        それ以来、通常は古い cgroup ファイルシステムは "cgroup1" や "legacy hierarchies"（レガシー階層構造）と呼ばれています。
+        この 2 つのバージョンの違いについての詳細な説明は、cgroup のマニュアルページをご覧ください。
+      </para>
+
+      <para>
+        <!--
+        LXC distinguishes settings for the legacy and the unified hierarchy by
+        using different configuration key prefixes. To alter settings for
+        controllers in a legacy hierarchy the key prefix
+        <option>lxc.cgroup.</option> must be used and in order to alter the
+        settings for a controller in the unified hierarchy the
+        <option>lxc.cgroup2.</option> key must be used. Note that LXC will
+        ignore <option>lxc.cgroup.</option> settings on systems that only use
+        the unified hierarchy. Conversely, it will ignore
+        <option>lxc.cgroup2.</option> options on systems that only use legacy
+        hierarchies.
+        -->
+        LXC は cgroup1（レガシー階層構造）と cgroup2（単一階層構造）に対する設定を、異なる設定プレフィックスを使って区別しています。
+        cgroup1 に対する設定を変更するには <option>lxc.cgroup.</option> というプレフィックスを使う必要があり、cgroup2 の設定を変更するには <option>lxc.cgroup2.</option> を使う必要があります。
+        LXC は、cgroup2 だけが使われているシステム上の <option>lxc.cgroup.</option> を無視します。逆に cgroup1 だけが使われているシステム上の <option>lxc.cgroup2.</option> を無視します。
+      </para>
+
+      <para>
+        <!--
+        At its core a cgroup hierarchy is a way to hierarchically organize
+        processes. Usually a cgroup hierarchy will have one or more
+        "controllers" enabled. A "controller" in a cgroup hierarchy is usually
+        responsible for distributing a specific type of system resource along
+        the hierarchy. Controllers include the "pids" controller, the "cpu"
+        controller, the "memory" controller and others. Some controllers
+        however do not fall into the category of distributing a system
+        resource, instead they are often referred to as "utility" controllers.
+        One utility controller is the device controller. Instead of
+        distributing a system resource it allows one to manage device access.
+        -->
+        cgroup 階層の本質は、プロセスを階層的に構造化する方法です。通常は、cgroup 階層では 1 つ以上の「コントローラー」が有効になっています。
+        通常、cgroup 階層の「コントローラー」は階層に従って特定のタイプのシステムリソースを分配する役割を果たします。
+        コントローラーには "pids" コントローラー、"cpu" コントローラー、"memory" コントローラーなどがあります。
+        しかし、システムリソースの分配するという役割に該当しないコントローラーもあります。このようなコントローラーは「ユーティリティー」コントローラーと呼ばれたりします。
+        ユーティリティーコントローラーの 1 つにデバイスコントローラーがあります。このコントローラーはシステムリソースを分配する代わりにデバイスへのアクセスを管理できます。
+      </para>
+
+      <para>
+        <!--
+        In the legacy hierarchy the device controller was implemented like most
+        other controllers as a set of files that could be written to. These
+        files where named "devices.allow" and "devices.deny". The legacy device
+        controller allowed the implementation of both "allowlists" and
+        "denylists".
+        -->
+        cgroup1 では、デバイスコントローラーは他の多くのコントローラーと同様に、書き込みできるファイルのセットとして実装されていました。
+        これらのファイルは "devices.allow" と "devices.deny" という名前のファイルでした。レガシーデバイスコントローラーは「許可リスト（allowlists）」と「拒否リスト（denylists）」の両方を実装できました。
+      </para>
+
+      <para>
+        <!--
+        An allowlist is a device program that by default blocks access to all
+        devices. In order to access specific devices "allow rules" for
+        particular devices or device classes must be specified. In contrast, a
+        denylist is a device program that by default allows access to all
+        devices. In order to restrict access to specific devices "deny rules"
+        for particular devices or device classes must be specified.
+        -->
+        許可リスト（allowlist）とは、すべてのデバイスへのアクセスをブロックするデバイスプログラムです。特定のデバイスへのアクセスを行うには、特定のデバイスもしくはデバイスクラスに対する「許可ルール（allow rules）」を指定する必要があります。
+        一方、拒否リスト（denylist）はデフォルトですべてのデバイスへのアクセスを許可するデバイスプログラムです。特定のデバイスへのアクセスを拒否するには、特定のデバイスもしくはデバイスクラスに対する「拒否ルール（deny rules）」を指定する必要があります。
+      </para>
+
+      <para>
+        <!--
+        In the unified cgroup hierarchy the implementation of the device
+        controller has completely changed. Instead of files to read from and
+        write to a eBPF program of
+        <option>BPF_PROG_TYPE_CGROUP_DEVICE</option> can be attached to a
+        cgroup. Even though the kernel implementation has changed completely
+        LXC tries to allow for the same semantics to be followed in the legacy
+        device cgroup and the unified eBPF-based device controller. The
+        following paragraphs explain the semantics for the unified eBPF-based
+        device controller.
+        -->
+        cgroup2 では、デバイスコントローラーの実装が完全に変わりました。読み書きするファイルの代わりに、<option>BPF_PROG_TYPE_CGROUP_DEVICE</option> の eBPF プログラムを cgroup にアタッチできます。
+        カーネルの実装が完全に変わったのにもかかわらず、LXC は cgroup1 のデバイスコントローラーと cgroup2 の eBPF ベースのデバイスコントローラーで同じセマンティクスに従えるようにしています。
+        このあとの段落では、cgroup2 の eBPF デバイスコントローラーに対するセマンティクスを説明します。
+      </para>
+
+      <para>
+        <!--
+        As mentioned the format for specifying device rules for the unified
+        eBPF-based device controller is the same as for the legacy cgroup
+        device controller; only the configuration key prefix has changed.
+        Specifically, device rules for the legacy cgroup device controller are
+        specified via <option>lxc.cgroup.devices.allow</option> and
+        <option>lxc.cgroup.devices.deny</option> whereas for the
+        cgroup2 eBPF-based device controller
+        <option>lxc.cgroup2.devices.allow</option> and
+        <option>lxc.cgroup2.devices.deny</option> must be used.
+        -->
+        先に述べたように、cgroup2 の eBPF ベースのデバイスコントローラーに対するデバイスルールを指定するフォーマットは、cgroup1 のデバイスコントローラーと同じです。ただし、設定キーのプレフィックスは変更されています。
+        具体的には、cgroup1 のデバイスコントローラーに対するデバイスルールは <option>lxc.cgroup.devices.allow</option> と <option>lxc.cgroup.devices.deny</option> を使って指定します。一方、cgroup2 の eBPF ベースのコントローラーでは <option>lxc.cgroup2.devices.allow</option> と <option>lxc.cgroup2.devices.deny</option> を使わなければなりません。
+      </para>
+      <para>
+        <itemizedlist>
+          <listitem>
+            <para>
+              <!--
+              A denylist device rule
+              <programlisting>
+                lxc.cgroup2.devices.deny = a
+              </programlisting>
+              will cause LXC to instruct the kernel to block access to all
+              devices by default. To grant access to devices allow device rules
+              must be added via the <option>lxc.cgroup2.devices.allow</option>
+              key. This is referred to as a "allowlist" device program.
+              -->
+              拒否リスト（denylist）のデバイスルール
+              <programlisting>
+                lxc.cgroup2.devices.deny = a
+              </programlisting>
+              は、カーネルに対してデフォルトですべてのデバイスへのアクセスをブロックするように LXC が指示します。
+              デバイスへのアクセスを許可するには、デバイスに対する許可ルールを <option>lxc.cgroup2.devices.allow</option> を使って追加する必要があります。これは「許可リスト」デバイスプログラムとして参照されます。
+            </para>
+          </listitem>
+
+          <listitem>
+            <para>
+              <!--
+              An allowlist device rule
+              <programlisting>
+                lxc.cgroup2.devices.allow = a
+              </programlisting>
+              will cause LXC to instruct the kernel to allow access to all
+              devices by default. To deny access to devices deny device rules
+              must be added via <option>lxc.cgroup2.devices.deny</option> key.
+              This is referred to as a "denylist" device program.
+              -->
+              許可リスト（allowlist）のデバイスルール
+              <programlisting>
+                lxc.cgroup2.devices.allow = a
+              </programlisting>
+              は、カーネルに対してすべてのデバイスへのアクセスをデフォルトで許可するように LXC が指示します。
+              デバイスへのアクセスを拒否するには、デバイスに対する拒否ルールを <option>lxc.cgroup2.devices.deny</option> を使って追加する必要があります。これは「拒否リスト」デバイスプログラムとして参照されます。
+            </para>
+          </listitem>
+
+          <listitem>
+            <para>
+              <!--
+              Specifying any of the aforementioned two rules will cause all
+              previous rules to be cleared, i.e. the device list will be reset.
+              -->
+              前述の 2 つのルールのいずれかを指定すると、それ以前に指定していたルールがすべてクリアされます。つまり、デバイスリストがリセットされます。
+            </para>
+          </listitem>
+
+          <listitem>
+            <para>
+              <!--
+            When an allowlist program is requested, i.e. access to all devices
+            is blocked by default, specific deny rules for individual devices
+            or device classes are ignored.
+                -->
+              許可リストプログラムが要求される場合、つまりデフォルトですべてのデバイスへのアクセスがブロックされている場合、個別のデバイスやデバイスクラスへの拒否ルールを指定しても無視されます。
+            </para>
+          </listitem>
+
+          <listitem>
+            <para>
+              <!--
+            When a denylist program is requested, i.e. access to all devices
+            is allowed by default, specific allow rules for individual devices
+            or device classes are ignored.
+                -->
+              拒否リストプログラムが要求される場合、つまりデフォルトですべてのデバイスへのアクセスが許可されている場合、個別のデバイスやデバイスクラスへの許可ルールを指定しても無視されます。
+            </para>
+          </listitem>
+        </itemizedlist>
+      </para>
+
+      <para>
+        <!--
+        For example the set of rules:
+          -->
+        例えば、次のようなルールの組
+        <programlisting>
+          lxc.cgroup2.devices.deny = a
+          lxc.cgroup2.devices.allow = c *:* m
+          lxc.cgroup2.devices.allow = b *:* m
+          lxc.cgroup2.devices.allow = c 1:3 rwm
+        </programlisting>
+        <!--
+        implements an allowlist device program, i.e. the kernel will block
+        access to all devices not specifically allowed in this list. This
+        particular program states that all character and block devices may be
+        created but only /dev/null might be read or written.
+          -->
+        は、許可リスト（allowlist）デバイスプログラムを実装します。つまり、カーネルはこのリストで許可されるように設定されていないすべてのデバイスへのアクセスをブロックします。
+        このプログラムでは、すべてのキャラクターデバイスとブロックデバイスが作成できますが、読み書きは /dev/null に対してしか行なえません。
+      </para>
+
+      <para>
+        <!--
+        If we instead switch to the following set of rules:
+          -->
+        代わりに先のルールから次のようなルールの組に変更したとすると、
+        <programlisting>
+          lxc.cgroup2.devices.allow = a
+          lxc.cgroup2.devices.deny = c *:* m
+          lxc.cgroup2.devices.deny = b *:* m
+          lxc.cgroup2.devices.deny = c 1:3 rwm
+        </programlisting>
+         <!--
+         then LXC would instruct the kernel to implement a denylist, i.e. the
+         kernel will allow access to all devices not specifically denied in
+         this list. This particular program states that no character devices or
+         block devices might be created and that /dev/null is not allow allowed
+         to be read, written, or created.
+           -->
+        LXC はカーネルに拒否リスト（denylist）の実装を指示します。つまりカーネルはこのリストで拒否を指定していないすべてのデバイスへのアクセスを許可します。
+        このプログラムでは、キャラクターデバイスとブロックデバイスは作成できません。そして /dev/null の読み書きと作成は許可されません。
+      </para>
+
+      <para>
+        <!--
+         Now consider the same program but followed by a "global rule"
+         which determines the type of device program (allowlist or
+         denylist) as explained above:
+          -->
+        ここで、同じプログラムでも、前述のようにデバイスのプログラムタイプを決定するような「グローバルルール」が続いている場合を考えてみましょう。
+        <programlisting>
+          lxc.cgroup2.devices.allow = a
+          lxc.cgroup2.devices.deny = c *:* m
+          lxc.cgroup2.devices.deny = b *:* m
+          lxc.cgroup2.devices.deny = c 1:3 rwm
+          lxc.cgroup2.devices.allow = a
+        </programlisting>
+        <!--
+        The last line will cause LXC to reset the device list without changing
+        the type of device program.
+          -->
+        最後の行は、デバイスプログラムのタイプを変更せずに、LXC がデバイスリストをリセットしてしまいます。
+      </para>
+
+      <para>
+        <!--
+        If we specify:
+          -->
+        次のように指定した場合、
+        <programlisting>
+          lxc.cgroup2.devices.allow = a
+          lxc.cgroup2.devices.deny = c *:* m
+          lxc.cgroup2.devices.deny = b *:* m
+          lxc.cgroup2.devices.deny = c 1:3 rwm
+          lxc.cgroup2.devices.deny = a
+        </programlisting>
+        <!--
+        instead then the last line will cause LXC to reset the device list and
+        switch from an allowlist program to a denylist program.
+          -->
+        前の例と違って最後の行によって、LXC はデバイスリストをリセットし、許可リスト（allowlist）から拒否リスト（denylist）にプログラムを変更してしまいます。
+      </para>
       <variablelist>
         <varlistentry>
           <term>
-            <option>lxc.cgroup.[controll name]</option>
+            <option>lxc.cgroup.[control name].[controller file]</option>
           </term>
           <listitem>
             <para>
@@ -1895,7 +2344,7 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               kernel running at the time the container is started, eg.
               <option>lxc.cgroup.cpuset.cpus</option>
               -->
-              legacy な cgroup 階層 (cgroup v1) に設定する値を指定します。コントローラー名は control group そのままの名前です。
+              レガシー cgroup 階層 (cgroup v1) に設定する値を指定します。コントローラー名は control group そのままの名前です。
               許される名前や値の書式は LXC が指定することはなく、コンテナが実行された時に実行されている Linux カーネルの機能に依存します。
               例えば <option>lxc.cgroup.cpuset.cpus</option> のようになります。
             </para>
@@ -1903,13 +2352,13 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
         </varlistentry>
         <varlistentry>
           <term>
-            <option>lxc.cgroup2.[controller name]</option>
+            <option>lxc.cgroup2.[controller name].[controller file]</option>
           </term>
           <listitem>
             <para>
               <!--
               Specify the control group value to be set on the unified cgroup
-              shierarchy. The controller name is the literal name of the control
+              hierarchy. The controller name is the literal name of the control
               group. The permitted names and the syntax of their values is not
               dictated by LXC, instead it depends on the features of the Linux
               kernel running at the time the container is started, eg.
@@ -1943,6 +2392,98 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               例えば、"c1" という名前のコンテナで <option>lxc.cgroup.dir = my-cgroup/first</option> のように設定すると、"my-cgroup" のサブ cgroup のようにコンテナの cgroup を作成します。
               例えば、ユーザのカレントの cgroup である "my-user" が cgroup v1 階層にある cpuset コントローラの root cgroup 内に存在する場合、この設定は "/sys/fs/cgroup/cpuset/my-user/my-cgroup/first/c1" という cgroup をこのコンテナ向けに作成します。
               存在しない cgroup は LXC が作成しますが、ユーザがカレントの cgroup に書き込み権を持っていることが前提となります。
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term>
+            <option>lxc.cgroup.dir.container</option>
+          </term>
+          <listitem>
+            <para>
+	      <!--
+              This is similar to <option>lxc.cgroup.dir</option>, but must be
+              used together with <option>lxc.cgroup.dir.monitor</option> and
+              affects only the container's cgroup path. This option is mutually
+              exclusive with <option>lxc.cgroup.dir</option>.
+              Note that the final path the container attaches to may be
+              extended further by the
+              <option>lxc.cgroup.dir.container.inner</option> option.
+	      -->
+	      これは <option>lxc.cgroup.dir</option> と同様の設定ですが、かならず <option>lxc.cgroup.dir.monitor</option> と同時に使わなければなりません。そして、設定はコンテナの cgroup パスにのみ影響を与えます。このオプションは <option>lxc.cgroup.dir</option> と同時に設定できません。コンテナがアタッチされる最終的なパスは <option>lxc.cgroup.dir.container.inner</option> オプションによりさらに変更される可能性があります。
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term>
+            <option>lxc.cgroup.dir.monitor</option>
+          </term>
+          <listitem>
+            <para>
+	      <!--
+              This is the monitor process counterpart to
+              <option>lxc.cgroup.dir.container</option>.
+	      -->
+	      このオプションは、モニタプロセスに対して<option>lxc.cgroup.dir.container</option> と同様の働きをします。
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term>
+            <option>lxc.cgroup.dir.monitor.pivot</option>
+          </term>
+          <listitem>
+            <para>
+              <!--
+              On container termination the PID of the monitor process is attached to this cgroup.
+              This path should not be a subpath of any other configured cgroup dir to ensure
+              proper removal of other cgroup paths on container termination.
+              -->
+              コンテナ終了時に、モニタープロセスの PID がここで指定した cgroup にアタッチされます。
+              コンテナ終了時に、他の cgroup パスが確実に適切に削除されるように、ここに設定するパスは他で設定した cgroup ディレクトリのサブパスにすべきではありません。
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term>
+            <option>lxc.cgroup.dir.container.inner</option>
+          </term>
+          <listitem>
+            <para>
+	      <!--
+              Specify an additional subdirectory where the cgroup namespace
+              will be created. With this option, the cgroup limits will be
+              applied to the outer path specified in
+              <option>lxc.cgroup.dir.container</option>, which is not accessible
+              from within the container, making it possible to better enforce
+              limits for privileged containers in a way they cannot override
+              them.
+              This only works in conjunction with the
+              <option>lxc.cgroup.dir.container</option> and
+              <option>lxc.cgroup.dir.monitor</option> options and has otherwise
+              no effect.
+	      -->
+	      cgroup 名前空間が作られる追加のサブディレクトリを指定します。このオプションを使うと、cgroup の制限は <option>lxc.cgroup.dir.container</option> で指定した外部パスに適用されます。<option>lxc.cgroup.dir.container</option> はコンテナ内部からアクセスできないため、特権コンテナに対する制限を上書きできない方法でよりよい方法で強制できます。
+	      このオプションは <option>lxc.cgroup.dir.container</option> と <option>lxc.cgroup.dir.monitor</option> と同時に指定したときのみ機能し、それ以外の場合は効果がありません。
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term>
+            <option>lxc.cgroup.relative</option>
+          </term>
+          <listitem>
+            <para>
+              <!--
+              Set this to 1 to instruct LXC to never escape to the
+              root cgroup. This makes it easy for users to adhere to
+              restrictions enforced by cgroup2 and
+              systemd. Specifically, this makes it possible to run LXC
+              containers as systemd services.
+                -->
+              LXC に root cgroup へのエスケープを行わないように指示するには、この値を 1 に設定してください。
+              これにより、ユーザは cgroup2 と systemd が強制する制限を遵守するのが容易になります。
+              具体的には、これにより LXC コンテナを systemd のサービスとして実行できます。
             </para>
           </listitem>
         </varlistentry>
@@ -2067,7 +2608,7 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
             standard namespace identifiers as seen in the
             <filename>/proc/PID/ns</filename> directory.
             The <option>lxc.namespace.keep</option> is a
-            blacklist option, i.e. it is useful when enforcing that containers
+            denylist option, i.e. it is useful when enforcing that containers
             must keep a specific set of namespaces.
             -->
               コンテナが、作成元のプロセスから継承する (新しい名前空間を作らずに元のプロセスの名前空間のまま実行する) 名前空間を指定します。継承する名前空間はスペース区切りのリストで指定します。指定する名前空間名は、<filename>/proc/PID/ns</filename> ディレクトリ内に存在する標準の名前空間指示子でなければなりません。<option>lxc.namespace.keep</option> はブラックリストを指定するオプションです。つまり、コンテナに特定の名前空間を使い続けることを強制したい場合に便利です。
@@ -2095,7 +2636,7 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
             container wants to inherit the network namespace it needs to inherit
             the user namespace as well.
                 -->
-              コンテナが新しいユーザ名前空間をリクエストし、そのコンテナがネットワーク名前空間は継承したい場合は、ユーザ名前空間は継承する必要があることに注意してください。
+              コンテナが新しいユーザ名前空間をリクエストし、そのコンテナがネットワーク名前空間は継承したい場合は、ユーザ名前空間も同様に継承する必要があることに注意してください。
             </para>
           </listitem>
         </varlistentry>
@@ -2168,8 +2709,51 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
                 -->
               ふたつのプロセスが異なるユーザ名前空間に存在し、そのうちのひとつが他のネットワーク名前空間を継承したい場合、通常はユーザ名前空間も同様に継承する必要があることに注意が必要です。
             </para>
+
+            <para>
+	      <!--
+            Note that without careful additional configuration of an LSM,
+            sharing user+pid namespaces with a task may allow that task to
+            escalate privileges to that of the task calling liblxc.
+		-->
+	      LSM で慎重に設定を追加しないで、タスクでユーザ + PID 名前空間を共有すると、そのタスクは liblxc を呼び出したタスクの権限に昇格できることに注意が必要です。
+            </para>
+
           </listitem>
         </varlistentry>
+
+        <varlistentry>
+          <term>
+            <option>lxc.time.offset.boot</option>
+          </term>
+          <listitem>
+            <para>
+              <!--
+            Specify a positive or negative offset for the boottime clock. The
+            format accepts hours (h), minutes (m), seconds (s),
+            milliseconds (ms), microseconds (us), and nanoseconds (ns).
+                -->
+              ブートタイム(boottime)クロックの正または負のオフセット値を指定します。フォーマットは、時(h)、分(m)、秒(s)、ミリ秒(ms)、マイクロ秒(us)、ナノ秒(ns)を指定できます。
+            </para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term>
+            <option>lxc.time.offset.monotonic</option>
+          </term>
+          <listitem>
+            <para>
+              <!--
+            Specify a positive or negative offset for the montonic clock. The
+            format accepts hours (h), minutes (m), seconds (s),
+            milliseconds (ms), microseconds (us), and nanoseconds (ns).
+                -->
+              monotonicクロックの正または負のオフセット値を指定します。フォーマットは、時(h)、分(m)、秒(s)、ミリ秒(ms)、マイクロ秒(us)、ナノ秒(ns)を指定できます。
+            </para>
+          </listitem>
+        </varlistentry>
+
       </variablelist>
     </refsect2>
 
@@ -2265,7 +2849,7 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
         container should be run can be specified in the container
         configuration.  The default is <command>lxc-container-default-cgns</command>
         if the host kernel is cgroup namespace aware, or
-        <command>lxc-container-default</command> othewise.
+        <command>lxc-container-default</command> otherwise.
         -->
         lxc が apparmor サポートでコンパイルされ、インストールされている場合で、ホストで apparmor が有効な場合、コンテナが従って動くべき apparmor プロファイルは、コンテナの設定で指定することが可能です。
         デフォルトは、ホストのカーネルで cgroup 名前空間が使える場合は <command>lxc-container-default-cgns</command>です。使えない場合は <command>lxc-container-default</command> です。
@@ -2294,6 +2878,14 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               もし apparmor プロファイルが変更されないままでなくてはならない場合 (ネストしたコンテナである場合や、すでに confined されている場合) は以下のように設定します。
             </para>
               <programlisting>lxc.apparmor.profile = unchanged</programlisting>
+            <para>
+              <!--
+                If you instruct LXC to generate the apparmor profile,
+                then use
+                -->
+              もし LXC に AppArmor プロファイルを生成するように指示するには次のように設定します。
+            </para>
+              <programlisting>lxc.apparmor.profile = generated</programlisting>
           </listitem>
         </varlistentry>
         <varlistentry>
@@ -2325,6 +2917,46 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
             </para>
           </listitem>
         </varlistentry>
+
+        <varlistentry>
+          <term>
+            <option>lxc.apparmor.allow_nesting</option>
+          </term>
+          <listitem>
+            <para>
+              <!--
+              If set this to 1, causes the following changes. When
+              generated apparmor profiles are used, they will contain
+              the necessary changes to allow creating a nested
+              container. In addition to the usual mount points,
+              <filename>/dev/.lxc/proc</filename>
+              and <filename>/dev/.lxc/sys</filename> will contain
+              procfs and sysfs mount points without the lxcfs
+              overlays, which, if generated apparmor profiles are
+              being used, will not be read/writable directly.
+              -->
+              1 に設定すると次のような変更が行われます。
+              generated な AppArmor プロファイルが使われる場合、ネストしたコンテナを使うのに必要な変更が含まれます。通常のマウントポイントに加えて、lxcfs のオーバーレイなしで、<filename>/dev/.lxc/proc</filename> と <filename>/dev/.lxc/sys</filename> が procfs と sysfs のマウントポイントに含まれます。
+              generated な AppArmor プロファイルが使われている場合は、直接読み書きはできません
+            </para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term>
+            <option>lxc.apparmor.raw</option>
+          </term>
+          <listitem>
+            <para>
+              <!--
+              A list of raw AppArmor profile lines to append to the
+              profile. Only valid when using generated profiles.
+                -->
+              プロファイルに加える、生の AppArmor プロファイル行のリストです。generated なプロファイルを使っているときのみ有効です。
+            </para>
+          </listitem>
+        </varlistentry>
+
       </variablelist>
     </refsect2>
 
@@ -2360,6 +2992,57 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
             <programlisting>lxc.selinux.context = system_u:system_r:lxc_t:s0:c22</programlisting>
           </listitem>
         </varlistentry>
+        <varlistentry>
+          <term>
+            <option>lxc.selinux.context.keyring</option>
+          </term>
+          <listitem>
+            <para>
+	      <!--
+              Specify the SELinux context under which the container's keyring
+              should be created. By default this the same as lxc.selinux.context, or
+              the the context lxc is executed under if lxc.selinux.context has not been set.
+	      -->
+	      コンテナのキーリングを作成する SELinux コンテキストを指定します。
+	      デフォルトでは lxc.selinux.context と同じになります。
+	      lxc.selinux.context が設定されていない場合は、LXC のコンテキストで実行されます。
+            </para>
+            <programlisting>lxc.selinux.context.keyring = system_u:system_r:lxc_t:s0:c22</programlisting>
+          </listitem>
+        </varlistentry>
+      </variablelist>
+    </refsect2>
+
+    <refsect2>
+      <title>カーネルキーリング<!-- Kernel Keyring --></title>
+      <para>
+	<!--
+        The Linux Keyring facility is primarily a way for various
+        kernel components to retain or cache security data, authentication
+        keys, encryption keys, and other data in the kernel. By default lxc
+        will create a new session keyring for the started application.
+	-->
+	Linux キーリング機能は、さまざまなカーネルコンポーネントが、セキュリティーデータ、認証キー、暗号化キー、その他のデータをカーネルに保持またはキャッシュするための機能です。
+	デフォルトでは、LXC は開始したアプリケーションのために、新しいセッションキーリングを作成します。
+      </para>
+      <variablelist>
+        <varlistentry>
+          <term>
+            <option>lxc.keyring.session</option>
+          </term>
+          <listitem>
+            <para>
+	      <!--
+              Disable the creation of new session keyring by lxc. The started
+              application will then inherit the current session keyring.
+              By default, or when passing the value 1, a new keyring will be created.
+	      -->
+	      LXC による新しいセッションキーリングの作成を無効にできます。その場合、開始したアプリケーションは、その時点のセッションキーリングを継承します。
+	      デフォルトは 1 で、1 の場合は LXC は新しいキーリングを作成します。
+            </para>
+            <programlisting>lxc.keyring.session = 0</programlisting>
+          </listitem>
+        </varlistentry>
       </variablelist>
     </refsect2>
 
@@ -2379,18 +3062,18 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
       <para>
         <!--
         Versions 1 and 2 are currently supported.  In version 1, the
-        policy is a simple whitelist.  The second line therefore must
-        read "whitelist", with the rest of the file containing one (numeric)
-        sycall number per line.  Each syscall number is whitelisted,
-        while every unlisted number is blacklisted for use in the container
+        policy is a simple allowlist.  The second line therefore must
+        read "allowlist", with the rest of the file containing one (numeric)
+        syscall number per line.  Each syscall number is allowlisted,
+        while every unlisted number is denylisted for use in the container
         -->
-        現時点では、バージョン番号は 1 と 2 をサポートしています。バージョン 1 では、ポリシーはシンプルなホワイトリストですので、2 行目は "whitelist" でなければなりません。
+        現時点では、バージョン番号は 1 と 2 をサポートしています。バージョン 1 では、ポリシーはシンプルなホワイトリストですので、2 行目は "allowlist" でなければなりません。
         そして残りの行には 1 行に 1 つずつ、システムコール番号を書きます。各行のシステムコール番号がホワイトリスト化され、リストにない番号は、そのコンテナではブラックリストに入ります。
       </para>
 
       <para>
         <!--
-       In version 2, the policy may be blacklist or whitelist,
+       In version 2, the policy may be denylist or allowlist,
        supports per-rule and per-policy default actions, and supports
        per-architecture system call resolution from textual names.
           -->
@@ -2398,7 +3081,7 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
       </para>
       <para>
         <!--
-       An example blacklist policy, in which all system calls are
+       An example denylist policy, in which all system calls are
        allowed except for mknod, which will simply do nothing and
        return 0 (success), looks like:
        -->
@@ -2407,9 +3090,39 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
 
       <programlisting>
       2
-      blacklist
+      denylist
       mknod errno 0
+      ioctl notify
       </programlisting>
+
+      <para>
+        <!--
+      Specifying "errno" as action will cause LXC to register a seccomp filter
+      that will cause a specific errno to be returned to the caller. The errno
+      value can be specified after the "errno" action word.
+          -->
+        アクションとして "errno" を指定すると、LXC は seccomp フィルタを登録します。これにより、指定した errno を呼び出し元に返します。
+        errno の値は "errno" という単語の後に指定します。
+      </para>
+
+      <para>
+        <!--
+      Specifying "notify" as action will cause LXC to register a seccomp
+      listener and retrieve a listener file descriptor from the kernel. When a
+      syscall is made that is registered as "notify" the kernel will generate a
+      poll event and send a message over the file descriptor. The caller can
+      read this message, inspect the syscalls including its arguments. Based on
+      this information the caller is expected to send back a message informing
+      the kernel which action to take. Until that message is sent the kernel
+      will block the calling process. The format of the messages to read and
+      sent is documented in seccomp itself.
+          -->
+        アクションとして "notify" を指定すると、LXC は seccomp リスナーを登録し、カーネルからリスナーのファイルディスクリプタを取得します。
+        "notify" として指定しているシステムコールが作成されると、カーネルは poll イベントを生成し、ファイルディスクリプタを通してメッセージを送信します。
+        呼び出し元はこのメッセージを読み、引数を含めてシステムコールを調査できます。
+        呼び出し元はこの情報に基づき、どのアクションを取るべきかをカーネルに知らせるメッセージを送り返すことが期待されます。
+        このメッセージが送られるまで、カーネルは呼び出し元のプロセスをブロックします。読み書きするメッセージのフォーマットは seccomp 自身に記述されています。
+      </para>
 
       <variablelist>
         <varlistentry>
@@ -2424,6 +3137,57 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               -->
               コンテナがスタートする前にロードする seccomp の設定を含むファイルを指定します。
              </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term>
+            <option>lxc.seccomp.allow_nesting</option>
+          </term>
+          <listitem>
+            <para>
+              <!--
+              If this flag is set to 1, then seccomp filters will be stacked
+              regardless of whether a seccomp profile is already loaded.
+              This allows nested containers to load their own seccomp profile.
+              The default setting is 0.
+                -->
+              このオプションを 1 に設定すると、すでに seccomp プロファイルがロードされている、いないに関わらず、seccomp フィルタが重ね合わせられます。
+              これにより、ネストされたコンテナが自身の seccomp プロファイルをロードできます。
+              デフォルト値は 0 です。
+             </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term>
+            <option>lxc.seccomp.notify.proxy</option>
+          </term>
+          <listitem>
+            <para>
+              <!--
+              Specify a unix socket to which LXC will connect and forward
+              seccomp events to. The path must be in the form
+              unix:/path/to/socket or unix:@socket. The former specifies a
+              path-bound unix domain socket while the latter specifies an
+              abstract unix domain socket.
+                -->
+              LXC が接続し、seccomp イベントを転送する UNIX ソケットを指定します。
+              パスは unix:/path/to/socket もしくは unix:@socket の形式でなければなりません。
+              前者はパス指定の UNIX ドメインソケットを指定し、後者は抽象 (abstract) UNIX ドメインソケットの指定です。
+             </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term>
+            <option>lxc.seccomp.notify.cookie</option>
+          </term>
+          <listitem>
+            <para>
+              <!--
+              An additional string sent along with proxied seccomp notification
+              requests.
+                -->
+              プロキシーされた seccomp 通知リクエストと一緒に送る追加文字列。
+            </para>
           </listitem>
         </varlistentry>
       </variablelist>
@@ -3130,9 +3894,11 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
             <para>
               <!--
               An integer used to sort the containers when auto-starting
-              a series of containers at once.
+              a series of containers at once. A lower value means an
+              earlier start.
               -->
-              多数の自動起動させるコンテナがある場合のコンテナの起動順を決めるのに使う整数を指定します。
+              自動起動させるコンテナが多数ある場合のコンテナの起動順を決めるのに使う整数を指定します。
+              小さい値ほど早く起動します。
             </para>
           </listitem>
         </varlistentry>
@@ -3149,6 +3915,25 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
               Default is 0.
                 -->
               この値が 0 でない場合、コンテナが初期化される前 (pre-start フックが実行される前) にマウント名前空間がホストから unshare されます。この機能を使う場合、スタート時に CAP_SYS_ADMIN ケーパビリティが必要です。デフォルト値は 0 です。
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term>
+            <option>lxc.monitor.signal.pdeath</option>
+          </term>
+          <listitem>
+            <para>
+	      <!--
+              Set the signal to be sent to the container's init when the lxc
+              monitor exits. By default it is set to SIGKILL which will cause
+              all container processes to be killed when the lxc monitor process
+              dies.
+              To ensure that containers stay alive even if lxc monitor dies set
+              this to 0.
+		-->
+	      lxc のモニタプロセスが終了した際に、コンテナの init プロセスに送出するシグナルを指定します。デフォルトでは、lxc のモニタプロセスが終了した場合には、すべてのコンテナ内のプロセスが停止するように SIGKILL が設定されています。
+	      lxc のモニタプロセスが終了しても、コンテナがすべて確実に動作しつづけるようにするには、この値を 0 に設定します。
             </para>
           </listitem>
         </varlistentry>
@@ -3223,10 +4008,21 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
 
       <para>
         <!--
-        This configuration parameter can be specified multiple times; once
+        Subkeys are available to narrow the scope of environment variables:
+        <command>lxc.environment.runtime</command> applies only to
+        the container's init process (and all its descendents),
+        and <command>lxc.environment.hooks</command> applies only to hooks.
+        -->
+        サブキーを使用して、環境変数のスコープを絞り込めます:
+        <command>lxc.environment.runtime</command> は、コンテナの init プロセス（とそのすべての子孫）にのみ適用されます。そして、<command>lxc.environment.hooks</command> はフックにのみ適用されます。
+      </para>
+
+      <para>
+        <!--
+        These configuration parameter can be specified multiple times; once
         for each environment variable you wish to configure.
         -->
-        この設定項目は、設定したい環境変数ごとに 1 度ずつ、何度でも指定できます。
+        これらの設定項目は、設定したい環境変数ごとに 1 度ずつ、何度でも指定できます。
       </para>
 
       <variablelist>
@@ -3237,10 +4033,10 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
           <listitem>
             <para>
               <!--
-              Specify an environment variable to pass into the container.
-              Example:
+              Environment variables applied both to the container init process
+              and to hooks. Example:
               -->
-              コンテナに渡したい環境変数を指定します。
+              環境変数は、コンテナの init プロセスとフックの両方に適用されます。
               例:
             </para>
             <programlisting>
@@ -3249,6 +4045,36 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
             </programlisting>
           </listitem>
         </varlistentry>
+
+        <varlistentry>
+          <term>
+            <option>lxc.environment.runtime</option>
+          </term>
+          <listitem>
+            <para>
+              <!--
+              Environment variables applied only to the container's init
+              process.
+              -->
+              環境変数はコンテナの init プロセスにのみ適用されます。
+            </para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term>
+            <option>lxc.environment.hooks</option>
+          </term>
+          <listitem>
+            <para>
+              <!--
+              Environment variables applied only to hooks.
+              -->
+              環境変数はフックにのみ適用されます。
+            </para>
+          </listitem>
+        </varlistentry>
+
       </variablelist>
     </refsect2>
 
@@ -3347,7 +4173,7 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
         lxc.net.1.ipv6.address = 2003:db8:1:0:214:1234:fe0b:3596
         lxc.net.2.type = phys
         lxc.net.2.flags = up
-        lxc.net.2.link = dummy0
+        lxc.net.2.link = random0
         lxc.net.2.hwaddr = 4a:49:43:49:79:ff
         lxc.net.2.ipv4.address = 10.2.3.6/24
         lxc.net.2.ipv6.address = 2003:db8:1:0:214:1234:fe0b:3297
@@ -3359,6 +4185,7 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
         lxc.mount.fstab = /etc/fstab.complex
         lxc.mount.entry = /lib /root/myrootfs/lib none ro,bind 0 0
         lxc.rootfs.path = dir:/mnt/rootfs.complex
+        lxc.rootfs.options = idmap=container
         lxc.cap.drop = sys_module mknod setuid net_raw
         lxc.cap.drop = mac_override
       </programlisting>
@@ -3393,11 +4220,6 @@ by KATOH Yasufumi <karma at jazz.email.ne.jp>
   </refsect1>
 
   &seealso;
-
-  <refsect1>
-    <title><!-- Author -->作者</title>
-    <para>Daniel Lezcano <email>daniel.lezcano@free.fr</email></para>
-  </refsect1>
 
 </refentry>
 

@@ -1,4 +1,3 @@
-[![LXD](https://linuxcontainers.org/static/img/containers.png)](https://linuxcontainers.org/lxd)
 # LXC
 
 LXC is the well-known and heavily tested low-level Linux container runtime. It
@@ -10,10 +9,10 @@ inside the Linux kernel.
 ## Status
 Type            | Service               | Status
 ---             | ---                   | ---
-CI (Linux)      | Jenkins               | [![Build Status](https://jenkins.linuxcontainers.org/job/lxc-github-commit/badge/icon)](https://jenkins.linuxcontainers.org/job/lxc-github-commit/)
-CI (Linux)      | Travis                | [![Build Status](https://travis-ci.org/lxc/lxc.svg?branch=master)](https://travis-ci.org/lxc/lxc/)
+CI (Linux)      | GitHub                | [![Build Status](https://github.com/lxc/lxc/actions/workflows/builds.yml/badge.svg)](https://github.com/lxc/lxc/actions)
 Project status  | CII Best Practices    | [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/1087/badge)](https://bestpractices.coreinfrastructure.org/projects/1087)
-Static Analysis | Coverity              | <a href="https://scan.coverity.com/projects/lxc-linux-containers"> <img alt="Coverity Scan Build Status" src="https://img.shields.io/coverity/scan/369.svg"/> </a>
+Fuzzing         | OSS-Fuzz              | [![Fuzzing Status](https://oss-fuzz-build-logs.storage.googleapis.com/badges/lxc.svg)](https://oss-fuzz-build-logs.storage.googleapis.com/index.html#lxc)
+Fuzzing         | CIFuzz                | [![CIFuzz](https://github.com/lxc/lxc/actions/workflows/fuzzing.yml/badge.svg)](https://github.com/lxc/lxc/actions/workflows/fuzzing.yml)
 
 ## System Containers
 
@@ -93,7 +92,7 @@ configuration keys such as `lxc.net.0` expose various subkeys such as
 `lxc.net.0.type`, `lxc.net.0.link`, `lxc.net.0.ipv6.address`, and others for
 even more fine-grained configuration.
 
-LXC is used as the default runtime for [LXD](https://github.com/lxc/lxd),
+LXC is used as the default runtime for [Incus](https://github.com/lxc/incus),
 a container hypervisor exposing a well-designed and stable REST-api on top of
 it.
 
@@ -106,30 +105,26 @@ features. This includes (but isn't limited to):
 - i686
 - x86_64
 - ppc, ppc64, ppc64le
+- riscv64
 - s390x
-- armvl7, arm64
+- armv7l, arm64
+- loongarch64
 
 LXC also supports at least the following C standard libraries:
 
 - glibc
 - musl
-- bionic (Android's libc)
 
 ## Backwards Compatibility
 
 LXC has always focused on strong backwards compatibility. In fact, the API
-hasn't been broken from release `1.0.0` onwards. Main LXC is currently at
-version `2.*.*`.
+hasn't been broken from release `1.0.0` onwards.
 
 ## Reporting Security Issues
 
 The LXC project has a good reputation in handling security issues quickly and
 efficiently. If you think you've found a potential security issue, please
-report it by e-mail to all of the following persons:
-
-- serge.hallyn (at) ubuntu (dot) com
-- stgraber (at) ubuntu (dot) com
-- christian.brauner (at) ubuntu (dot) com
+report it by e-mail to security (at) linuxcontainers (dot) org.
 
 For further details please have a look at
 
@@ -143,15 +138,15 @@ require that each commit includes a `Signed-off-by` line. The coding style we
 use is identical to the one used by the Linux kernel. You can find a detailed
 introduction at:
 
-- https://www.kernel.org/doc/html/v4.10/process/coding-style.html
+- https://docs.kernel.org/process/coding-style.html#codingstyle
 
-and should also take a look at the [CONTRIBUTING](CONTRIBUTING) file in this
+and should also take a look at the [CONTRIBUTING](CONTRIBUTING.md) file in this
 repo.
 
 If you want to become more active it is usually also a good idea to show up in
-the LXC IRC channel `#lxc-dev` on `Freenode`. We try to do all development out
+the LXC IRC channel [#lxc-dev](https://kiwiirc.com/client/irc.libera.chat/#lxc-dev) on irc.libera.chat. We try to do all development out
 in the open and discussion of new features or bugs is done either in
-appropriate Github issues or on IRC.
+appropriate GitHub issues or on IRC.
 
 When thinking about making security critical contributions or substantial
 changes it is usually a good idea to ping the developers first and ask whether
@@ -166,7 +161,7 @@ versioning](http://semver.org/) scheme.
 
 Source for the latest released version can always be downloaded from
 
-- https://linuxcontainers.org/downloads/
+- https://linuxcontainers.org/lxc/downloads/
 
 You can browse the up to the minute source code and change history online
 
@@ -176,15 +171,10 @@ You can browse the up to the minute source code and change history online
 
 Without considering distribution specific details a simple
 
-    ./autogen.sh && ./configure && make && sudo make install
+    meson setup -Dprefix=/usr build
+    meson compile -C build
 
 is usually sufficient.
-
-In order to test current git master of LXC it is usually a good idea to compile with
-
-    ./autogen.sh && ./configure && make
-
-in a convenient directory and set `LD_LIBRARY_PATH="${BUILD_DIR}"/lxc/src/lxc/.libs`.
 
 ## Getting help
 
@@ -192,15 +182,14 @@ When you find you need help, the LXC projects provides you with several options.
 
 ### Discuss Forum
 
-We maintain an discuss forum at
+We maintain a discuss forum at
 
 - https://discuss.linuxcontainers.org/
 
 where you can get support.
 
 ### IRC
-
-You can find support by joining `#lxcontainers` on `Freenode`.
+You can find us in [#lxc](https://kiwiirc.com/client/irc.libera.chat/#lxc) on irc.libera.chat.
 
 ### Mailing Lists
 

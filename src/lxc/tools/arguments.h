@@ -1,35 +1,18 @@
-/*
- * lxc: linux Container library
- *
- * (C) Copyright IBM Corp. 2007, 2008
- *
- * Authors:
- * Daniel Lezcano <daniel.lezcano at free.fr>
- * Michel Normand <normand at fr.ibm.com>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
 #ifndef __LXC_ARGUMENTS_H
 #define __LXC_ARGUMENTS_H
 
+#include "config.h"
+
 #include <getopt.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <sys/param.h>
 #include <sys/types.h>
-#include <lxc/lxccontainer.h>
+
+#include "lxc.h"
+#include "compiler.h"
 
 struct lxc_arguments;
 
@@ -83,17 +66,17 @@ struct lxc_arguments {
 	int force;
 
 	/* close fds from parent? */
-	int close_all_fds;
+	bool close_all_fds;
 
 	/* lxc-create */
 	char *bdevtype, *configfile, *template;
 	char *fstype;
 	uint64_t fssize;
 	char *lvname, *vgname, *thinpool;
-	char *rbdname, *rbdpool;
+	char *rbdname, *rbdpool, *rbduser;
 	char *zfsroot, *lowerdir, *dir;
 
-	/* lxc-execute */
+	/* lxc-execute and lxc-unshare */
 	uid_t uid;
 	gid_t gid;
 
@@ -120,6 +103,7 @@ struct lxc_arguments {
 	int keepdata;
 	int keepname;
 	int keepmac;
+	int allowrunning;
 
 	/* lxc-ls */
 	char *ls_fancy_format;
@@ -136,6 +120,12 @@ struct lxc_arguments {
 	/* lxc-copy */
 	bool tmpfs;
 
+	/* lxc-unshare */
+	int flags;
+	int want_default_mounts;
+	const char *want_hostname;
+	bool setuid;
+
 	/* remaining arguments */
 	char *const *argv;
 	int argc;
@@ -146,7 +136,8 @@ struct lxc_arguments {
 
 #define LXC_COMMON_OPTIONS                                                     \
 	    { "name",        required_argument, 0, 'n'         },              \
-            { "help",        no_argument,       0, 'h'         },              \
+	    { "help",        no_argument,       0, 'h'         },              \
+	    { "help",        no_argument,       0, '?'         },              \
 	    { "usage",       no_argument,       0, OPT_USAGE   },              \
 	    { "version",     no_argument,       0, OPT_VERSION },              \
 	    { "quiet",       no_argument,       0, 'q'         },              \
@@ -165,16 +156,31 @@ struct lxc_arguments {
 #define OPT_SHARE_UTS OPT_USAGE - 5
 #define OPT_SHARE_PID OPT_USAGE - 6
 
-extern int lxc_arguments_parse(struct lxc_arguments *args, int argc,
-			       char *const argv[]);
+__hidden extern int lxc_arguments_parse(struct lxc_arguments *args, int argc, char *const argv[]);
 
-extern int lxc_arguments_str_to_int(struct lxc_arguments *args,
-				    const char *str);
+__hidden extern int lxc_arguments_str_to_int(struct lxc_arguments *args, const char *str);
 
-#define lxc_error(arg, fmt, args...)                                           \
-	if (!(arg)->quiet)                                                     \
-	fprintf(stderr, "%s: " fmt "\n", (arg)->progname, ##args)
+__hidden extern bool lxc_setup_shared_ns(struct lxc_arguments *args, struct lxc_container *c);
 
-extern bool lxc_setup_shared_ns(struct lxc_arguments *args, struct lxc_container *c);
+#define lxc_info(arg, fmt, args...)                                                \
+	do {                                                                       \
+		if (!(arg)->quiet) {                                               \
+			fprintf(stdout, "%s: " fmt "\n", (arg)->progname, ##args); \
+		}                                                                  \
+	} while (0)
+
+#define lxc_error(arg, fmt, args...)                                               \
+	do {                                                                       \
+		if (!(arg)->quiet) {                                               \
+			fprintf(stderr, "%s: " fmt "\n", (arg)->progname, ##args); \
+		}                                                                  \
+	} while (0)
+
+#define lxc_sys_error(arg, fmt, args...)                                                     \
+	do {                                                                                 \
+		if (!(arg)->quiet) {                                                         \
+			fprintf(stderr, "%s: " fmt "\n", (arg)->progname, ##args); \
+		}                                                                            \
+	} while (0)
 
 #endif /* __LXC_ARGUMENTS_H */

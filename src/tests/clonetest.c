@@ -1,21 +1,11 @@
 /* liblxcapi
  *
- * Copyright © 2012 Serge Hallyn <serge.hallyn@ubuntu.com>.
- * Copyright © 2012 Canonical Ltd.
+ * SPDX-License-Identifier: GPL-2.0-only
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2, as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+#include "config.h"
+
 #include <lxc/lxccontainer.h>
 
 #include <unistd.h>
@@ -41,6 +31,7 @@ int main(int argc, char *argv[])
 		lxc_container_put(c);
 		c = NULL;
 	}
+
 	if (c2) {
 		c2->destroy(c2);
 		lxc_container_put(c2);
@@ -52,11 +43,14 @@ int main(int argc, char *argv[])
 		ret = 1;
 		goto out;
 	}
+
 	c->save_config(c, NULL);
+
 	if (!c->createl(c, "busybox", NULL, NULL, 0, NULL)) {
 		fprintf(stderr, "%d: failed to create a container\n", __LINE__);
 		goto out;
 	}
+
 	c->load_config(c, NULL);
 
 	if (!c->is_defined(c)) {
@@ -92,12 +86,14 @@ int main(int argc, char *argv[])
 			c2->destroy(c2);
 		lxc_container_put(c2);
 	}
+
 	c2 = lxc_container_new("clonetest-o1", NULL);
 	if (c2) {
 		if (c2->is_defined(c2))
 			c2->destroy(c2);
 		lxc_container_put(c2);
 	}
+
 	c2 = lxc_container_new("clonetest-o2", NULL);
 	if (c2) {
 		if (c2->is_defined(c2))
@@ -112,6 +108,7 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "failed loading clonetestlvm1\n");
 		goto out;
 	}
+
 	if (!c->is_defined(c)) {
 		fprintf(stderr, "clonetestlvm1 does not exist, skipping lvm tests\n");
 		ret = 0;
@@ -138,6 +135,7 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "lvm clone failed\n");
 		goto out;
 	}
+
 	lxc_container_put(c2);
 	lxc_container_put(c);
 	c = c2 = NULL;
@@ -166,13 +164,16 @@ out:
 	if (c3) {
 		lxc_container_put(c3);
 	}
+
 	if (c2) {
 		c2->destroy(c2);
 		lxc_container_put(c2);
 	}
+
 	if (c) {
 		c->destroy(c);
 		lxc_container_put(c);
 	}
+
 	exit(ret);
 }

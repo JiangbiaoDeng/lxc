@@ -1,21 +1,7 @@
-/*
- * Copyright © 2012 Serge Hallyn <serge.hallyn@ubuntu.com>.
- * Copyright © 2012 Canonical Ltd.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
+
+#include "config.h"
+
 #include <alloca.h>
 #include <stdio.h>
 #include <sched.h>
@@ -27,13 +13,17 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#include "lxc/namespace.h"
+#include "namespace.h"
 
-#include <sched.h>
-#include <linux/sched.h>
 #include <linux/reboot.h>
 
+/*
+ * glibc clone(2) wrapper function prototypes as defined in that manpage. Most
+ * architectures use clone(...), but ia64 uses __clone2(...).
+ */
 int clone(int (*fn)(void *), void *child_stack, int flags, void *arg, ...);
+int __clone2(int (*fn)(void *), void *stack_base, size_t stack_size, \
+		int flags, void *arg, ...);
 
 static int do_reboot(void *arg)
 {
@@ -41,6 +31,7 @@ static int do_reboot(void *arg)
 
 	if (reboot(*cmd))
 		printf("failed to reboot(%d): %s\n", *cmd, strerror(errno));
+
 	return 0;
 }
 
@@ -51,7 +42,12 @@ static int test_reboot(int cmd, int sig)
 	int status;
 	pid_t ret;
 
+#if defined(__ia64__)
+	ret = __clone2(do_reboot, stack, stack_size, \
+			CLONE_NEWPID | SIGCHLD, &cmd);
+#else
 	ret = clone(do_reboot, stack, CLONE_NEWPID | SIGCHLD, &cmd);
+#endif
 	if (ret < 0) {
 		printf("failed to clone: %s\n", strerror(errno));
 		return -1;
@@ -65,6 +61,7 @@ static int test_reboot(int cmd, int sig)
 	if (!WIFSIGNALED(status)) {
 		if (sig != -1)
 			printf("child process exited but was not signaled\n");
+
 		return -1;
 	}
 
@@ -89,9 +86,11 @@ static int have_reboot_patch(void)
 	fclose(f);
 	if (ret != 1)
 		return 0;
+
 	ret = reboot(v ? LINUX_REBOOT_CMD_CAD_ON : LINUX_REBOOT_CMD_CAD_OFF);
 	if (ret != -1)
 		return 0;
+
 	return 1;
 }
 

@@ -1,20 +1,10 @@
 /* liblxcapi
  *
- * Copyright © 2017 Christian Brauner <christian.brauner@ubuntu.com>.
+ * SPDX-License-Identifier: GPL-2.0-only
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2, as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+#include "config.h"
 
 #include <alloca.h>
 #include <errno.h>
@@ -30,6 +20,7 @@
 
 #include "lxc/lxccontainer.h"
 #include "lxctest.h"
+#include "../lxc/compiler.h"
 
 struct thread_args {
 	int thread_id;
@@ -38,7 +29,7 @@ struct thread_args {
 	struct lxc_container *c;
 };
 
-void *state_wrapper(void *data)
+__noreturn static void *state_wrapper(void *data)
 {
 	struct thread_args *args = data;
 
@@ -50,7 +41,6 @@ void *state_wrapper(void *data)
 		  args->thread_id, args->timeout, args->success ? "SUCCESS" : "FAILED");
 
 	pthread_exit(NULL);
-	return NULL;
 }
 
 int main(int argc, char *argv[])
@@ -108,8 +98,6 @@ int main(int argc, char *argv[])
 		sleep(5);
 
 		for (i = 0; i < 10; i++) {
-			int ret;
-
 			args[i].thread_id = i;
 			args[i].c = c;
 			args[i].timeout = -1;
@@ -123,8 +111,6 @@ int main(int argc, char *argv[])
 		}
 
 		for (i = 0; i < 10; i++) {
-			int ret;
-
 			ret = pthread_join(threads[i], NULL);
 			if (ret != 0)
 				goto on_error_stop;
@@ -149,5 +135,6 @@ on_error_put:
 	lxc_container_put(c);
 	if (ret == EXIT_SUCCESS)
 		lxc_debug("%s\n", "All state server tests passed");
+
 	exit(ret);
 }

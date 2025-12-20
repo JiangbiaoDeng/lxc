@@ -1,36 +1,19 @@
-/*
- * lxc: linux Container library
- *
- * (C) Copyright IBM Corp. 2007, 2008
- *
- * Authors:
- * Daniel Lezcano <daniel.lezcano at free.fr>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
-#define _GNU_SOURCE
+#include "config.h"
+
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "lxc.h"
+
 #include "conf.h"
 #include "confile.h"
 #include "log.h"
-#include "lxccontainer.h"
+#include "macro.h"
+#include "memory_utils.h"
 #include "overlay.h"
 #include "rsync.h"
 #include "storage.h"
@@ -67,240 +50,139 @@ int ovl_clonepaths(struct lxc_storage *orig, struct lxc_storage *new, const char
 
 	new->dest = must_make_path(lxcpath, cname, "rootfs", NULL);
 
-	ret = mkdir_p(new->dest, 0755);
+	ret = lxc_mkdir_p(new->dest, 0755);
 	if (ret < 0 && errno != EEXIST) {
 		SYSERROR("Failed to create directory \"%s\"", new->dest);
 		return -1;
 	}
 
-	if (am_guest_unpriv()) {
+	if (am_guest_unpriv() || !list_empty(&conf->id_map)) {
 		ret = chown_mapped_root(new->dest, conf);
 		if (ret < 0)
 			WARN("Failed to update ownership of %s", new->dest);
 	}
 
 	if (strcmp(orig->type, "dir") == 0) {
-		char *delta, *lastslash;
-		char *work;
-		int ret, len, lastslashidx;
+		__do_free char *delta = NULL, *work = NULL;
+		int len;
 
-		/* If we have "/var/lib/lxc/c2/rootfs" then delta will be
-		 * "/var/lib/lxc/c2/delta0".
-		 */
-		lastslash = strrchr(new->dest, '/');
-		if (!lastslash) {
-			ERROR("Failed to detect \"/\" in string \"%s\"",
-			      new->dest);
-			return -22;
-		}
+		delta = must_make_path(lxcpath, cname, LXC_OVERLAY_DELTA_PATH, NULL);
 
-		if (strlen(lastslash) < (sizeof("/rootfs") - 1)) {
-			ERROR("Failed to detect \"/rootfs\" in string \"%s\"",
-			      new->dest);
-			return -22;
-		}
+		ret = lxc_mkdir_p(delta, 0755);
+		if (ret < 0 && errno != EEXIST)
+			return log_error_errno(-errno, errno, "Failed to create directory \"%s\"", delta);
 
-		lastslash++;
-		lastslashidx = lastslash - new->dest;
-
-		delta = malloc(lastslashidx + 7);
-		if (!delta) {
-			ERROR("Failed to allocate memory");
-			return -1;
-		}
-
-		memcpy(delta, new->dest, lastslashidx + 1);
-		memcpy(delta + lastslashidx, "delta0", sizeof("delta0") - 1);
-		delta[lastslashidx + sizeof("delta0") - 1] = '\0';
-
-		ret = mkdir(delta, 0755);
-		if (ret < 0 && errno != EEXIST) {
-			SYSERROR("Failed to create directory \"%s\"", delta);
-			free(delta);
-			return -1;
-		}
-
-		if (am_guest_unpriv()) {
-			ret = chown_mapped_root(delta, conf);
-			if (ret < 0)
-				WARN("Failed to update ownership of %s", delta);
-		}
-
-		/* Make workdir for overlayfs.v22 or higher:
+		/*
+		 * Make workdir for overlayfs.v22 or higher:
 		 * The workdir will be
-		 *	/var/lib/lxc/c2/olwork
+		 *	/var/lib/lxc/c2/LXC_OVERLAY_WORK_PATH
 		 * and is used to prepare files before they are atomically
 		 * switched to the overlay destination. Workdirs need to be on
 		 * the same filesystem as the upperdir so it's OK for it to be
 		 * empty.
 		 */
-		work = malloc(lastslashidx + 7);
-		if (!work) {
-			ERROR("Failed to allocate memory");
-			free(delta);
-			return -1;
-		}
+		work = must_make_path(lxcpath, cname, LXC_OVERLAY_WORK_PATH, NULL);
 
-		memcpy(work, new->dest, lastslashidx + 1);
-		memcpy(work + lastslashidx, "olwork", sizeof("olwork") - 1);
-		work[lastslashidx + sizeof("olwork") - 1] = '\0';
+		ret = lxc_mkdir_p(work, 0755);
+		if (ret < 0 && errno != EEXIST)
+			return log_error_errno(-errno, errno, "Failed to create directory \"%s\"", work);
 
-		ret = mkdir(work, 0755);
-		if (ret < 0) {
-			SYSERROR("Failed to create directory \"%s\"", work);
-			free(delta);
-			free(work);
-			return -1;
-		}
+		if (am_guest_unpriv() || !list_empty(&conf->id_map)) {
+			__do_free char *lxc_overlay_delta_dir = NULL,
+				       *lxc_overlay_private_dir = NULL;
 
-		if (am_guest_unpriv()) {
+			lxc_overlay_private_dir = must_make_path(lxcpath, cname, LXC_OVERLAY_PRIVATE_DIR, NULL);
+			ret = chown_mapped_root(lxc_overlay_private_dir, conf);
+			if (ret < 0)
+				WARN("Failed to update ownership of %s", lxc_overlay_private_dir);
+
+			lxc_overlay_delta_dir = must_make_path(lxcpath, cname, LXC_OVERLAY_DELTA_PATH, NULL);
+			ret = chown_mapped_root(lxc_overlay_delta_dir, conf);
+			if (ret < 0)
+				WARN("Failed to update ownership of %s", lxc_overlay_delta_dir);
+
 			ret = chown_mapped_root(work, conf);
 			if (ret < 0)
 				WARN("Failed to update ownership of %s", work);
 		}
-		free(work);
 
-		/* strlen("overlay:") = 8
-		 * +
-		 * strlen(delta)
-		 * +
-		 * :
-		 * +
-		 * strlen(src)
-		 * +
-		 * \0
-		 */
 		src = lxc_storage_get_path(orig->src, orig->type);
-		len = 8 + strlen(delta) + 1 + strlen(src) + 1;
+		len = STRLITERALLEN("overlay") + STRLITERALLEN(":") +
+		      strlen(src) + STRLITERALLEN(":") + strlen(delta) + 1;
+
 		new->src = malloc(len);
-		if (!new->src) {
-			ERROR("Failed to allocate memory");
-			free(delta);
-			return -ENOMEM;
-		}
+		if (!new->src)
+			return log_error_errno(-ENOMEM, ENOMEM, "Failed to allocate memory");
 
 		ret = snprintf(new->src, len, "overlay:%s:%s", src, delta);
-		free(delta);
-		if (ret < 0 || (size_t)ret >= len) {
-			ERROR("Failed to create string");
-			return -1;
-		}
+		if (ret < 0 || ret >= len)
+			return log_error_errno(-EIO, EIO, "Failed to create string");
 	} else if (!strcmp(orig->type, "overlayfs") ||
 		   !strcmp(orig->type, "overlay")) {
-		char *clean_old_path, *clean_new_path;
-		char *lastslash, *ndelta, *nsrc, *odelta, *osrc, *s1, *s2, *s3,
-		    *work;
-		int ret, lastslashidx;
+		__do_free char *clean_old_path = NULL, *clean_new_path = NULL,
+			       *ndelta = NULL, *osrc = NULL, *work = NULL;
+		char *nsrc, *odelta, *s1, *s2, *s3;
 		size_t len, name_len;
 
 		osrc = strdup(orig->src);
-		if (!osrc) {
-			ERROR("Failed to duplicate string \"%s\"", orig->src);
-			return -22;
-		}
+		if (!osrc)
+			return log_error_errno(-22, ENOMEM, "Failed to duplicate string \"%s\"", orig->src);
 
 		nsrc = osrc;
-		if (strncmp(osrc, "overlay:", 8) == 0)
-			nsrc += 8;
-		else if (strncmp(osrc, "overlayfs:", 10) == 0)
-			nsrc += 10;
+		if (strncmp(osrc, "overlay:", STRLITERALLEN("overlay:")) == 0)
+			nsrc += STRLITERALLEN("overlay:");
+		else if (strncmp(osrc, "overlayfs:", STRLITERALLEN("overlayfs:")) == 0)
+			nsrc += STRLITERALLEN("overlayfs:");
 
 		odelta = strchr(nsrc, ':');
-		if (!odelta) {
-			ERROR("Failed to find \":\" in \"%s\"", nsrc);
-			free(osrc);
-			return -22;
-		}
+		if (!odelta)
+			return log_error_errno(-22, ENOENT, "Failed to find \":\" in \"%s\"", nsrc);
 
 		*odelta = '\0';
 		odelta++;
-		ndelta = must_make_path(lxcpath, cname, "delta0", NULL);
+		ndelta = must_make_path(lxcpath, cname, LXC_OVERLAY_DELTA_PATH, NULL);
 
-		ret = mkdir(ndelta, 0755);
-		if (ret < 0 && errno != EEXIST) {
-			SYSERROR("Failed to create directory \"%s\"", ndelta);
-			free(osrc);
-			free(ndelta);
-			return -1;
-		}
-
-		if (am_guest_unpriv()) {
-			ret = chown_mapped_root(ndelta, conf);
-			if (ret < 0)
-				WARN("Failed to update ownership of %s",
-				     ndelta);
-		}
+		ret = lxc_mkdir_p(ndelta, 0755);
+		if (ret < 0 && errno != EEXIST)
+			return log_error_errno(-errno, errno, "Failed to create directory \"%s\"", ndelta);
 
 		/* Make workdir for overlayfs.v22 or higher (See the comment
 		 * further up.).
 		 */
-		lastslash = strrchr(ndelta, '/');
-		if (!lastslash) {
-			ERROR("Failed to detect \"/\" in \"%s\"", ndelta);
-			free(osrc);
-			free(ndelta);
-			return -1;
-		}
-		lastslash++;
-		lastslashidx = lastslash - ndelta;
+		work = must_make_path(lxcpath, cname, LXC_OVERLAY_WORK_PATH, NULL);
+		ret = lxc_mkdir_p(work, 0755);
+		if (ret < 0 && errno != EEXIST)
+			return log_error_errno(-errno, errno, "Failed to create directory \"%s\"", ndelta);
 
-		work = malloc(lastslashidx + 7);
-		if (!work) {
-			free(osrc);
-			free(ndelta);
-			ERROR("Failed to allocate memory");
-			return -1;
-		}
+		if (am_guest_unpriv() || !list_empty(&conf->id_map)) {
+			__do_free char *lxc_overlay_delta_dir = NULL,
+				       *lxc_overlay_private_dir = NULL;
 
-		memcpy(work, ndelta, lastslashidx + 1);
-		memcpy(work + lastslashidx, "olwork", sizeof("olwork") - 1);
-		work[lastslashidx + sizeof("olwork") - 1] = '\0';
+			lxc_overlay_private_dir = must_make_path(lxcpath, cname, LXC_OVERLAY_PRIVATE_DIR, NULL);
+			ret = chown_mapped_root(lxc_overlay_private_dir, conf);
+			if (ret < 0)
+				WARN("Failed to update ownership of %s", lxc_overlay_private_dir);
 
-		ret = mkdir(work, 0755);
-		if (ret < 0 && errno != EEXIST) {
-			SYSERROR("Failed to create directory \"%s\"", ndelta);
-			free(osrc);
-			free(ndelta);
-			free(work);
-			return -1;
-		}
+			lxc_overlay_delta_dir = must_make_path(lxcpath, cname, LXC_OVERLAY_DELTA_PATH, NULL);
+			ret = chown_mapped_root(lxc_overlay_delta_dir, conf);
+			if (ret < 0)
+				WARN("Failed to update ownership of %s", lxc_overlay_delta_dir);
 
-		if (am_guest_unpriv()) {
 			ret = chown_mapped_root(work, conf);
 			if (ret < 0)
 				WARN("Failed to update ownership of %s", work);
 		}
-		free(work);
 
-		/* strlen("overlay:") = 8
-		 * +
-		 * strlen(delta)
-		 * +
-		 * :
-		 * +
-		 * strlen(src)
-		 * +
-		 * \0
-		 */
-		len = 8 + strlen(ndelta) + 1 + strlen(nsrc) + 1;
+		len = STRLITERALLEN("overlay") + STRLITERALLEN(":") + strlen(nsrc) + STRLITERALLEN(":") + strlen(ndelta) + 1;
 		new->src = malloc(len);
-		if (!new->src) {
-			free(osrc);
-			free(ndelta);
-			ERROR("Failed to allocate memory");
-			return -ENOMEM;
-		}
+		if (!new->src)
+			return log_error_errno(-ENOMEM, ENOMEM, "Failed to allocate memory");
+
 		ret = snprintf(new->src, len, "overlay:%s:%s", nsrc, ndelta);
-		if (ret < 0 || (size_t)ret >= len) {
-			ERROR("Failed to create string");
-			free(osrc);
-			free(ndelta);
-			return -1;
-		}
+		if (ret < 0 || (size_t)ret >= len)
+			return log_error_errno(-EIO, EIO, "Failed to create string");
 
 		ret = ovl_do_rsync(odelta, ndelta, conf);
-		free(osrc);
-		free(ndelta);
 		if (ret < 0)
 			return -1;
 
@@ -309,43 +191,31 @@ int ovl_clonepaths(struct lxc_storage *orig, struct lxc_storage *new, const char
 		 * don't need to record a dependency. If we would restore would
 		 * also fail.
 		 */
-		clean_old_path = lxc_deslashify(oldpath);
+		clean_old_path = lxc_path_simplify(oldpath);
 		if (!clean_old_path)
-			return -1;
+			return log_error_errno(-ENOMEM, ENOMEM, "Failed to create clean path for \"%s\"", oldpath);
 
-		clean_new_path = lxc_deslashify(lxcpath);
-		if (!clean_new_path) {
-			free(clean_old_path);
-			return -1;
-		}
+		clean_new_path = lxc_path_simplify(lxcpath);
+		if (!clean_new_path)
+			return log_error_errno(-ENOMEM, ENOMEM, "Failed to create clean path for \"%s\"", lxcpath);
 
 		s1 = strrchr(clean_old_path, '/');
-		if (!s1) {
-			ERROR("Failed to detect \"/\" in string \"%s\"", clean_old_path);
-			free(clean_old_path);
-			free(clean_new_path);
-			return -1;
-		}
+		if (!s1)
+			return log_error_errno(-ENOENT, ENOENT, "Failed to detect \"/\" in string \"%s\"", clean_old_path);
 
 		s2 = strrchr(clean_new_path, '/');
-		if (!s2) {
-			ERROR("Failed to detect \"/\" in string \"%s\"", clean_new_path);
-			free(clean_old_path);
-			free(clean_new_path);
-			return -1;
-		}
+		if (!s2)
+			return log_error_errno(-ENOENT, ENOENT, "Failed to detect \"/\" in string \"%s\"", clean_new_path);
 
-		if (!strncmp(s1, "/snaps", sizeof("/snaps") - 1)) {
+		if (!strncmp(s1, "/snaps", STRLITERALLEN("/snaps"))) {
 			s1 = clean_new_path;
 			s2 = clean_old_path;
 			s3 = (char *)cname;
-		} else if (!strncmp(s2, "/snaps", sizeof("/snaps") - 1)) {
+		} else if (!strncmp(s2, "/snaps", STRLITERALLEN("/snaps"))) {
 			s1 = clean_old_path;
 			s2 = clean_new_path;
 			s3 = (char *)oldname;
 		} else {
-			free(clean_old_path);
-			free(clean_new_path);
 			return 0;
 		}
 
@@ -354,34 +224,23 @@ int ovl_clonepaths(struct lxc_storage *orig, struct lxc_storage *new, const char
 			char *tmp;
 
 			tmp = (char *)(s2 + len + 1);
-			if (*tmp == '\0') {
-				free(clean_old_path);
-				free(clean_new_path);
+			if (*tmp == '\0')
 				return 0;
-			}
 
 			name_len = strlen(s3);
-			if (strncmp(s3, tmp, name_len)) {
-				free(clean_old_path);
-				free(clean_new_path);
+			if (strncmp(s3, tmp, name_len))
 				return 0;
-			}
 
-			free(clean_old_path);
-			free(clean_new_path);
 			return LXC_CLONE_SNAPSHOT;
 		}
 
-		free(clean_old_path);
-		free(clean_new_path);
 		return 0;
 	} else {
-		ERROR("overlay clone of %s container is not yet supported",
-		      orig->type);
-		/* Note, supporting this will require ovl_mount supporting
+		/*
+		 * Note, supporting this will require ovl_mount supporting
 		 * mounting of the underlay. No big deal, just needs to be done.
 		 */
-		return -1;
+		return log_error_errno(-EINVAL, EINVAL, "overlay clone of %s container is not yet supported", orig->type);
 	}
 
 	return 0;
@@ -389,65 +248,60 @@ int ovl_clonepaths(struct lxc_storage *orig, struct lxc_storage *new, const char
 
 /* To say "lxc-create -t ubuntu -n o1 -B overlay" means you want
  * "<lxcpath>/<lxcname>/rootfs" to have the created container, while all changes
- * after starting the container are written to "<lxcpath>/<lxcname>/delta0".
+ * after starting the container are written to "<lxcpath>/<lxcname>/LXC_OVERLAY_DELTA_PATH".
  */
 int ovl_create(struct lxc_storage *bdev, const char *dest, const char *n,
-	       struct bdev_specs *specs)
+	       struct bdev_specs *specs, const struct lxc_conf *conf)
 {
-	char *delta;
+	__do_free char *delta = NULL, *tmp = NULL;
 	int ret;
-	size_t len, newlen;
+	size_t len;
 
 	len = strlen(dest);
-	if (len < 8 || strcmp(dest + len - 7, "/rootfs")) {
-		ERROR("Failed to detect \"/rootfs\" in \"%s\"", dest);
-		return -1;
-	}
+	if (len < 8 || strcmp(dest + len - STRLITERALLEN("/rootfs"), "/rootfs"))
+		return log_error_errno(-ENOENT, ENOENT, "Failed to detect \"/rootfs\" in \"%s\"", dest);
 
 	bdev->dest = strdup(dest);
-	if (!bdev->dest) {
-		ERROR("Failed to duplicate string \"%s\"", dest);
-		return -1;
-	}
+	if (!bdev->dest)
+		return log_error_errno(-ENOMEM, ENOMEM, "Failed to duplicate string \"%s\"", dest);
 
-	delta = strdup(dest);
-	if (!delta) {
-		ERROR("Failed to allocate memory");
-		return -1;
-	}
-	memcpy(delta + len - 6, "delta0", sizeof("delta0") - 1);
+	tmp = strndup(dest, len - STRLITERALLEN("/rootfs"));
+	if (!tmp)
+		return log_error_errno(-ENOMEM, ENOMEM, "Failed to duplicate string \"%s\"", dest);
 
-	ret = mkdir_p(delta, 0755);
-	if (ret < 0) {
-		SYSERROR("Failed to create directory \"%s\"", delta);
-		free(delta);
-		return -1;
+	delta = must_make_path(tmp, LXC_OVERLAY_DELTA_PATH, NULL);
+
+	ret = lxc_mkdir_p(delta, 0755);
+	if (ret < 0 && errno != EEXIST)
+		return log_error_errno(-errno, errno, "Failed to create directory \"%s\"", delta);
+
+	if (am_guest_unpriv() || !list_empty(&conf->id_map)) {
+		__do_free char *lxc_overlay_private_dir = NULL;
+
+		lxc_overlay_private_dir = must_make_path(tmp, LXC_OVERLAY_PRIVATE_DIR, NULL);
+		ret = chown_mapped_root(lxc_overlay_private_dir, conf);
+		if (ret < 0)
+			WARN("Failed to update ownership of %s", lxc_overlay_private_dir);
+
+		ret = chown_mapped_root(delta, conf);
+		if (ret < 0)
+			WARN("Failed to update ownership of %s", delta);
 	}
 
 	/* overlay:lower:upper */
-	newlen = (2 * len) + strlen("overlay:") + 2;
-	bdev->src = malloc(newlen);
-	if (!bdev->src) {
-		ERROR("Failed to allocate memory");
-		free(delta);
-		return -1;
-	}
+	len = STRLITERALLEN("overlay") + STRLITERALLEN(":") + len + STRLITERALLEN(":") + strlen(delta) + 1;
+	bdev->src = malloc(len);
+	if (!bdev->src)
+		return log_error_errno(-ENOMEM, ENOMEM, "Failed to allocate memory");
 
-	ret = snprintf(bdev->src, newlen, "overlay:%s:%s", dest, delta);
-	if (ret < 0 || (size_t)ret >= newlen) {
-		ERROR("Failed to create string");
-		free(delta);
-		return -1;
-	}
+	ret = snprintf(bdev->src, len, "overlay:%s:%s", dest, delta);
+	if (ret < 0 || (size_t)ret >= len)
+		return log_error_errno(-EIO, EIO, "Failed to create rootfs path");
 
-	ret = mkdir_p(bdev->dest, 0755);
-	if (ret < 0) {
-		SYSERROR("Failed to create directory \"%s\"", bdev->dest);
-		free(delta);
-		return -1;
-	}
+	ret = lxc_mkdir_p(bdev->dest, 0755);
+	if (ret < 0 && errno != EEXIST)
+		return log_error_errno(-errno, errno, "Failed to create directory \"%s\"", bdev->dest);
 
-	free(delta);
 	return 0;
 }
 
@@ -487,12 +341,12 @@ bool ovl_detect(const char *path)
 
 int ovl_mount(struct lxc_storage *bdev)
 {
-	char *tmp, *options, *dup, *lower, *upper;
-	char *options_work, *work, *lastslash;
-	int lastslashidx;
+	__do_free char *options = NULL, *options_work = NULL;
+	unsigned long mntflags = 0;
+	char *mntdata = NULL;
+	char *tmp, *dup, *lower, *upper;
+	char *work, *lastslash;
 	size_t len, len2;
-	unsigned long mntflags;
-	char *mntdata;
 	int ret, ret2;
 
 	if (strcmp(bdev->type, "overlay") && strcmp(bdev->type, "overlayfs"))
@@ -508,17 +362,15 @@ int ovl_mount(struct lxc_storage *bdev)
 	 * mount -t overlay * -o upperdir=${upper},lowerdir=${lower} lower dest
 	 */
 	dup = strdup(bdev->src);
-	if (!dup) {
-		ERROR("Failed to allocate memory");
-		return -1;
-	}
+	if (!dup)
+		return log_error_errno(-ENOMEM, ENOMEM, "Failed to allocate memory");
 	upper = dup;
 	lower = dup;
 
-	if (strncmp(dup, "overlay:", 8) == 0)
-		lower += 8;
-	else if (strncmp(dup, "overlayfs:", 10) == 0)
-		lower += 10;
+	if (strncmp(dup, "overlay:", STRLITERALLEN("overlay:")) == 0)
+		lower += STRLITERALLEN("overlay:");
+	else if (strncmp(dup, "overlayfs:", STRLITERALLEN("overlayfs:")) == 0)
+		lower += STRLITERALLEN("overlayfs:");
 	if (upper != lower)
 		upper = lower;
 
@@ -537,7 +389,7 @@ int ovl_mount(struct lxc_storage *bdev)
 	upper++;
 
 	/* if delta doesn't yet exist, create it */
-	ret = mkdir_p(upper, 0755);
+	ret = lxc_mkdir_p(upper, 0755);
 	if (ret < 0 && errno != EEXIST) {
 		SYSERROR("Failed to create directory \"%s\"", upper);
 		free(dup);
@@ -546,9 +398,9 @@ int ovl_mount(struct lxc_storage *bdev)
 
 	/* overlayfs.v22 or higher needs workdir option:
 	 * if upper is
-	 *	/var/lib/lxc/c2/delta0
+	 *	/var/lib/lxc/c2/LXC_OVERLAY_DELTA_PATH
 	 * then workdir is
-	 *	/var/lib/lxc/c2/olwork
+	 *	/var/lib/lxc/c2/LXC_OVERLAY_WORK_PATH
 	 */
 	lastslash = strrchr(upper, '/');
 	if (!lastslash) {
@@ -557,21 +409,11 @@ int ovl_mount(struct lxc_storage *bdev)
 		return -22;
 	}
 
-	lastslash++;
-	lastslashidx = lastslash - upper;
+	upper[lastslash - upper] = '\0';
+	work = must_make_path(upper, LXC_OVERLAY_WORK_DIR, NULL);
+	upper[lastslash - upper] = '/';
 
-	work = malloc(lastslashidx + 7);
-	if (!work) {
-		ERROR("Failed to allocate memory");
-		free(dup);
-		return -22;
-	}
-
-	memcpy(work, upper, lastslashidx + 1);
-	memcpy(work + lastslashidx, "olwork", sizeof("olwork") - 1);
-	work[lastslashidx + sizeof("olwork") - 1] = '\0';
-
-	ret = parse_mntopts(bdev->mntopts, &mntflags, &mntdata);
+	ret = parse_mntopts_legacy(bdev->mntopts, &mntflags, &mntdata);
 	if (ret < 0) {
 		ERROR("Failed to parse mount options");
 		free(mntdata);
@@ -580,7 +422,7 @@ int ovl_mount(struct lxc_storage *bdev)
 		return -22;
 	}
 
-	ret = mkdir_p(work, 0755);
+	ret = lxc_mkdir_p(work, 0755);
 	if (ret < 0 && errno != EEXIST) {
 		SYSERROR("Failed to create directory \"%s\"", work);
 		free(mntdata);
@@ -598,33 +440,33 @@ int ovl_mount(struct lxc_storage *bdev)
 	if (mntdata) {
 		len = strlen(lower) + strlen(upper) +
 		      strlen("upperdir=,lowerdir=,") + strlen(mntdata) + 1;
-		options = alloca(len);
+		options = must_realloc(NULL, len);
 		ret = snprintf(options, len, "upperdir=%s,lowerdir=%s,%s",
 			       upper, lower, mntdata);
 
 		len2 = strlen(lower) + strlen(upper) + strlen(work) +
-		       strlen("upperdir=,lowerdir=,workdir=") +
+		       strlen("upperdir=,lowerdir=,workdir=,") +
 		       strlen(mntdata) + 1;
-		options_work = alloca(len2);
-		ret2 = snprintf(options, len2,
+		options_work = must_realloc(NULL, len2);
+		ret2 = snprintf(options_work, len2,
 				"upperdir=%s,lowerdir=%s,workdir=%s,%s", upper,
 				lower, work, mntdata);
 	} else {
 		len = strlen(lower) + strlen(upper) +
 		      strlen("upperdir=,lowerdir=") + 1;
-		options = alloca(len);
+		options = must_realloc(NULL, len);
 		ret = snprintf(options, len, "upperdir=%s,lowerdir=%s", upper,
 			       lower);
 
 		len2 = strlen(lower) + strlen(upper) + strlen(work) +
 		       strlen("upperdir=,lowerdir=,workdir=") + 1;
-		options_work = alloca(len2);
+		options_work = must_realloc(NULL, len2);
 		ret2 = snprintf(options_work, len2,
 				"upperdir=%s,lowerdir=%s,workdir=%s", upper,
 				lower, work);
 	}
 
-	if (ret < 0 || ret >= len || ret2 < 0 || ret2 >= len2) {
+	if (ret < 0 || (size_t)ret >= len || ret2 < 0 || (size_t)ret2 >= len2) {
 		ERROR("Failed to create string");
 		free(mntdata);
 		free(dup);
@@ -636,18 +478,17 @@ int ovl_mount(struct lxc_storage *bdev)
 	ret = ovl_remount_on_enodev(lower, bdev->dest, ovl_name,
 				    MS_MGC_VAL | mntflags, options_work);
 	if (ret < 0) {
-		INFO("Failed to mount \"%s\" on \"%s\" with options \"%s\". "
-		     "Retrying without workdir: %s",
-		     lower, bdev->dest, options_work, strerror(errno));
+		SYSINFO("Failed to mount \"%s\" on \"%s\" with options \"%s\". "
+		        "Retrying without workdir",
+		        lower, bdev->dest, options_work);
 
 		/* Assume we cannot use a workdir as we are on a version <= v21.
 		 */
 		ret = ovl_remount_on_enodev(lower, bdev->dest, ovl_name,
 					    MS_MGC_VAL | mntflags, options);
 		if (ret < 0)
-			SYSERROR("Failed to mount \"%s\" on \"%s\" with "
-				 "options \"%s\": %s",
-				 lower, bdev->dest, options, strerror(errno));
+			SYSERROR("Failed to mount \"%s\" on \"%s\" with options \"%s\"",
+			         lower, bdev->dest, options);
 		else
 			INFO("Mounted \"%s\" on \"%s\" with options \"%s\"",
 			     lower, bdev->dest, options);
@@ -734,7 +575,7 @@ char *ovl_get_rootfs(const char *rootfs_path, size_t *rootfslen)
 int ovl_mkdir(const struct mntent *mntent, const struct lxc_rootfs *rootfs,
 	      const char *lxc_name, const char *lxc_path)
 {
-	char lxcpath[MAXPATHLEN];
+	char lxcpath[PATH_MAX];
 	char **opts;
 	int ret;
 	size_t arrlen, i, len, rootfslen;
@@ -763,8 +604,8 @@ int ovl_mkdir(const struct mntent *mntent, const struct lxc_rootfs *rootfs,
 	}
 
 	if (rootfs_path) {
-		ret = snprintf(lxcpath, MAXPATHLEN, "%s/%s", lxc_path, lxc_name);
-		if (ret < 0 || ret >= MAXPATHLEN)
+		ret = snprintf(lxcpath, PATH_MAX, "%s/%s", lxc_path, lxc_name);
+		if (ret < 0 || ret >= PATH_MAX)
 			goto err;
 
 		rootfs_dir = ovl_get_rootfs(rootfs_path, &rootfslen);
@@ -782,25 +623,25 @@ int ovl_mkdir(const struct mntent *mntent, const struct lxc_rootfs *rootfs,
 	ret = 0;
 	if (upperdir) {
 		if (!rootfs_path)
-			ret = mkdir_p(upperdir, 0755);
+			ret = lxc_mkdir_p(upperdir, 0755);
 		else if (!strncmp(upperdir, lxcpath, dirlen) &&
 			 strncmp(upperdir, rootfs_dir, rootfslen))
-			ret = mkdir_p(upperdir, 0755);
+			ret = lxc_mkdir_p(upperdir, 0755);
+
 		if (ret < 0)
-			WARN("Failed to create directory \"%s\": %s", upperdir,
-			     strerror(errno));
+			SYSWARN("Failed to create directory \"%s\"", upperdir);
 	}
 
 	ret = 0;
 	if (workdir) {
 		if (!rootfs_path)
-			ret = mkdir_p(workdir, 0755);
+			ret = lxc_mkdir_p(workdir, 0755);
 		else if (!strncmp(workdir, lxcpath, dirlen) &&
 			 strncmp(workdir, rootfs_dir, rootfslen))
-			ret = mkdir_p(workdir, 0755);
+			ret = lxc_mkdir_p(workdir, 0755);
+
 		if (ret < 0)
-			WARN("Failed to create directory \"%s\": %s", workdir,
-			     strerror(errno));
+			SYSWARN("Failed to create directory \"%s\"", workdir);
 	}
 
 	fret = 0;
@@ -814,7 +655,7 @@ err:
 /* To be called from lxcapi_clone() in lxccontainer.c: When we clone a container
  * with overlay lxc.mount.entry entries we need to update absolute paths for
  * upper- and workdir. This update is done in two locations:
- * lxc_conf->unexpanded_config and lxc_conf->mount_list. Both updates are done
+ * lxc_conf->unexpanded_config and lxc_conf->mount_entries. Both updates are done
  * independent of each other since lxc_conf->mountlist may contain more mount
  * entries (e.g. from other included files) than lxc_conf->unexpanded_config.
  */
@@ -822,10 +663,10 @@ int ovl_update_abs_paths(struct lxc_conf *lxc_conf, const char *lxc_path,
 			 const char *lxc_name, const char *newpath,
 			 const char *newname)
 {
-	char new_upper[MAXPATHLEN], new_work[MAXPATHLEN], old_upper[MAXPATHLEN],
-	    old_work[MAXPATHLEN];
+	char new_upper[PATH_MAX], new_work[PATH_MAX], old_upper[PATH_MAX],
+	    old_work[PATH_MAX];
 	size_t i;
-	struct lxc_list *iterator;
+	struct string_entry *entry;
 	char *cleanpath = NULL;
 	int fret = -1;
 	int ret = 0;
@@ -839,7 +680,7 @@ int ovl_update_abs_paths(struct lxc_conf *lxc_conf, const char *lxc_path,
 
 	/*
 	 * We have to update lxc_conf->unexpanded_config separately from
-	 * lxc_conf->mount_list.
+	 * lxc_conf->mount_entries.
 	 */
 	for (i = 0; i < sizeof(ovl_dirs) / sizeof(ovl_dirs[0]); i++) {
 		if (!clone_update_unexp_ovl_paths(lxc_conf, lxc_path, newpath,
@@ -849,56 +690,56 @@ int ovl_update_abs_paths(struct lxc_conf *lxc_conf, const char *lxc_path,
 	}
 
 	ret =
-	    snprintf(old_work, MAXPATHLEN, "workdir=%s/%s", lxc_path, lxc_name);
-	if (ret < 0 || ret >= MAXPATHLEN)
+	    snprintf(old_work, PATH_MAX, "workdir=%s/%s", lxc_path, lxc_name);
+	if (ret < 0 || ret >= PATH_MAX)
 		goto err;
 
 	ret =
-	    snprintf(new_work, MAXPATHLEN, "workdir=%s/%s", cleanpath, newname);
-	if (ret < 0 || ret >= MAXPATHLEN)
+	    snprintf(new_work, PATH_MAX, "workdir=%s/%s", cleanpath, newname);
+	if (ret < 0 || ret >= PATH_MAX)
 		goto err;
 
-	lxc_list_for_each(iterator, &lxc_conf->mount_list) {
+	list_for_each_entry(entry, &lxc_conf->mount_entries, head) {
 		char *mnt_entry = NULL, *new_mnt_entry = NULL, *tmp = NULL,
 		     *tmp_mnt_entry = NULL;
 
-		mnt_entry = iterator->elem;
+		mnt_entry = entry->val;
 
 		if (strstr(mnt_entry, "overlay"))
 			tmp = "upperdir";
 		if (!tmp)
 			continue;
 
-		ret = snprintf(old_upper, MAXPATHLEN, "%s=%s/%s", tmp, lxc_path,
+		ret = snprintf(old_upper, PATH_MAX, "%s=%s/%s", tmp, lxc_path,
 			       lxc_name);
-		if (ret < 0 || ret >= MAXPATHLEN)
+		if (ret < 0 || ret >= PATH_MAX)
 			goto err;
 
-		ret = snprintf(new_upper, MAXPATHLEN, "%s=%s/%s", tmp,
+		ret = snprintf(new_upper, PATH_MAX, "%s=%s/%s", tmp,
 			       cleanpath, newname);
-		if (ret < 0 || ret >= MAXPATHLEN)
+		if (ret < 0 || ret >= PATH_MAX)
 			goto err;
 
-		if (strstr(mnt_entry, old_upper)) {
-			tmp_mnt_entry =
-			    lxc_string_replace(old_upper, new_upper, mnt_entry);
-		}
+		if (strstr(mnt_entry, old_upper))
+			tmp_mnt_entry = lxc_string_replace(old_upper, new_upper, mnt_entry);
 
 		if (strstr(mnt_entry, old_work)) {
 			if (tmp_mnt_entry)
-				new_mnt_entry = lxc_string_replace(
-				    old_work, new_work, tmp_mnt_entry);
+				new_mnt_entry = lxc_string_replace(old_work,
+								   new_work,
+								   tmp_mnt_entry);
 			else
-				new_mnt_entry = lxc_string_replace(
-				    old_work, new_work, mnt_entry);
+				new_mnt_entry = lxc_string_replace(old_work,
+								   new_work,
+								   mnt_entry);
 		}
 
 		if (new_mnt_entry) {
-			free(iterator->elem);
-			iterator->elem = strdup(new_mnt_entry);
+			free(entry->val);
+			entry->val = strdup(new_mnt_entry);
 		} else if (tmp_mnt_entry) {
-			free(iterator->elem);
-			iterator->elem = strdup(tmp_mnt_entry);
+			free(entry->val);
+			entry->val = strdup(tmp_mnt_entry);
 		}
 
 		free(new_mnt_entry);
@@ -953,7 +794,7 @@ static int ovl_do_rsync(const char *src, const char *dest,
 {
 	int ret = -1;
 	struct rsync_data_char rdata = {0};
-	char cmd_output[MAXPATHLEN] = {0};
+	char cmd_output[PATH_MAX] = {0};
 
 	rdata.src = (char *)src;
 	rdata.dest = (char *)dest;

@@ -1,41 +1,28 @@
-/* liblxcapi
- *
- * Copyright © 2017 Christian Brauner <christian.brauner@ubuntu.com>.
- * Copyright © 2017 Canonical Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2, as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
-#define _GNU_SOURCE
-#define __STDC_FORMAT_MACROS
+#include "config.h"
+
 #include <errno.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
+#include "log.h"
 #include "ringbuf.h"
+#include "syscall_wrappers.h"
 #include "utils.h"
+
+lxc_log_define(ringbuf, lxc);
 
 int lxc_ringbuf_create(struct lxc_ringbuf *buf, size_t size)
 {
+	__do_close int memfd = -EBADF;
 	char *tmp;
 	int ret;
-	int memfd = -1;
 
 	buf->size = size;
 	buf->r_off = 0;
@@ -50,12 +37,20 @@ int lxc_ringbuf_create(struct lxc_ringbuf *buf, size_t size)
 	if (buf->addr == MAP_FAILED)
 		return -EINVAL;
 
-	memfd = memfd_create(".lxc_ringbuf", MFD_CLOEXEC);
+	memfd = memfd_create(".lxc_ringbuf", MFD_CLOEXEC | MFD_NOEXEC_SEAL);
+
+	if (memfd < 0 && errno == EINVAL) {
+		TRACE("MFD_NOEXEC_SEAL may unsupported, using MFD_CLOEXEC only");
+		memfd = memfd_create(".lxc_ringbuf", MFD_CLOEXEC);
+	}
+
 	if (memfd < 0) {
+		char template[] = P_tmpdir "/.lxc_ringbuf_XXXXXX";
+
 		if (errno != ENOSYS)
 			goto on_error;
 
-		memfd = lxc_make_tmpfile((char *){P_tmpdir"/.lxc_ringbuf_XXXXXX"}, true);
+		memfd = lxc_make_tmpfile(template, true);
 	}
 	if (memfd < 0)
 		goto on_error;
@@ -74,14 +69,10 @@ int lxc_ringbuf_create(struct lxc_ringbuf *buf, size_t size)
 	if (tmp == MAP_FAILED || tmp != (buf->addr + buf->size))
 		goto on_error;
 
-	close(memfd);
-
 	return 0;
 
 on_error:
 	lxc_ringbuf_release(buf);
-	if (memfd >= 0)
-		close(memfd);
 	return -1;
 }
 
@@ -110,7 +101,7 @@ int lxc_ringbuf_write(struct lxc_ringbuf *buf, const char *msg, size_t len)
 	char *w_addr;
 	uint64_t free;
 
-	/* sanity check: a write should never exceed the ringbuffer's total size */
+	/* consistency check: a write should never exceed the ringbuffer's total size */
 	if (len > buf->size)
 		return -EFBIG;
 

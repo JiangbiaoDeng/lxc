@@ -1,40 +1,19 @@
-/*
- * lxc: linux Container library
- *
- * (C) Copyright IBM Corp. 2007, 2008
- *
- * Authors:
- * Daniel Lezcano <daniel.lezcano at free.fr>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- */
+/* SPDX-License-Identifier: LGPL-2.1+ */
 
-#define _GNU_SOURCE
-#define __STDC_FORMAT_MACROS
+#include "config.h"
+
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/sysmacros.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
-#include "config.h"
 #include "log.h"
 #include "lvm.h"
+#include "memory_utils.h"
 #include "rsync.h"
 #include "storage.h"
 #include "storage_utils.h"
@@ -52,6 +31,7 @@ struct lvcreate_args {
 	const char *lv;
 	const char *thinpool;
 	const char *fstype;
+	bool sigwipe;
 
 	/* snapshot specific arguments */
 	const char *source_lv;
@@ -73,12 +53,19 @@ static int lvm_create_exec_wrapper(void *data)
 
 	(void)setenv("LVM_SUPPRESS_FD_WARNINGS", "1", 1);
 	if (args->thinpool)
-		execlp("lvcreate", "lvcreate", "--thinpool", args->thinpool,
-		       "-V", args->size, args->vg, "-n", args->lv,
-		       (char *)NULL);
+		if(args->sigwipe)
+			execlp("lvcreate", "lvcreate", "-Wy", "--yes", "--thinpool", args->thinpool,
+			       "-V", args->size, args->vg, "-n", args->lv, (char *)NULL);
+		else
+			execlp("lvcreate", "lvcreate", "-qq", "--thinpool", args->thinpool,
+			       "-V", args->size, args->vg, "-n", args->lv, (char *)NULL);
 	else
-		execlp("lvcreate", "lvcreate", "-L", args->size, args->vg, "-n",
-		       args->lv, (char *)NULL);
+		if(args->sigwipe)
+			execlp("lvcreate", "lvcreate", "-Wy", "--yes", "-L", args->size, args->vg, "-n",
+			       args->lv, (char *)NULL);
+		else
+			execlp("lvcreate", "lvcreate", "-qq", "-L", args->size, args->vg, "-n",
+			       args->lv, (char *)NULL);
 
 	return -1;
 }
@@ -107,61 +94,47 @@ static int lvm_snapshot_exec_wrapper(void *data)
  */
 static int do_lvm_create(const char *path, uint64_t size, const char *thinpool)
 {
+	__do_free char *pathdup = NULL;
 	int len, ret;
-	char *pathdup, *vg, *lv;
-	char cmd_output[MAXPATHLEN];
+	char *vg, *lv;
+	char cmd_output[PATH_MAX];
 	char sz[24];
-	char *tp = NULL;
+	__do_free char *tp = NULL;
 	struct lvcreate_args cmd_args = {0};
 
 	ret = snprintf(sz, 24, "%" PRIu64 "b", size);
-	if (ret < 0 || ret >= 24) {
-		ERROR("Failed to create string: %d", ret);
-		return -1;
-	}
+	if (ret < 0 || ret >= 24)
+		return log_error(-EIO, "Failed to create string: %d", ret);
 
 	pathdup = strdup(path);
-	if (!pathdup) {
-		ERROR("Failed to duplicate string \"%s\"", path);
-		return -1;
-	}
+	if (!pathdup)
+		return log_error(-ENOMEM, "Failed to duplicate string \"%s\"", path);
 
 	lv = strrchr(pathdup, '/');
-	if (!lv) {
-		ERROR("Failed to detect \"/\" in string \"%s\"", pathdup);
-		free(pathdup);
-		return -1;
-	}
+	if (!lv)
+		return log_error(-EINVAL, "Failed to detect \"/\" in string \"%s\"", pathdup);
 	*lv = '\0';
 	lv++;
 	TRACE("Parsed logical volume \"%s\"", lv);
 
 	vg = strrchr(pathdup, '/');
-	if (!vg) {
-		ERROR("Failed to detect \"/\" in string \"%s\"", pathdup);
-		free(pathdup);
-		return -1;
-	}
+	if (!vg)
+		return log_error(-EINVAL, "Failed to detect \"/\" in string \"%s\"", pathdup);
 	vg++;
 	TRACE("Parsed volume group \"%s\"", vg);
 
 	if (thinpool) {
 		len = strlen(pathdup) + strlen(thinpool) + 2;
-		tp = alloca(len);
+		tp = must_realloc(NULL, len);
 
 		ret = snprintf(tp, len, "%s/%s", pathdup, thinpool);
-		if (ret < 0 || ret >= len) {
-			ERROR("Failed to create string: %d", ret);
-			free(pathdup);
-			return -1;
-		}
+		if (ret < 0 || ret >= len)
+			return log_error(-EIO, "Failed to create string: %d", ret);
 
 		ret = lvm_is_thin_pool(tp);
 		TRACE("got %d for thin pool at path: %s", ret, tp);
 		if (ret < 0) {
-			ERROR("Failed to detect whether \"%s\" is a thinpool", tp);
-			free(pathdup);
-			return -1;
+			return log_error(-EINVAL, "Failed to detect whether \"%s\" is a thinpool", tp);
 		} else if (!ret) {
 			TRACE("Detected that \"%s\" is not a thinpool", tp);
 			tp = NULL;
@@ -174,20 +147,24 @@ static int do_lvm_create(const char *path, uint64_t size, const char *thinpool)
 	cmd_args.vg = vg;
 	cmd_args.lv = lv;
 	cmd_args.size = sz;
-	TRACE("Creating new lvm storage volume \"%s\" on volume group \"%s\" "
-	      "of size \"%s\"", lv, vg, sz);
-	ret = run_command(cmd_output, sizeof(cmd_output),
-			  lvm_create_exec_wrapper, (void *)&cmd_args);
-	if (ret < 0) {
-		ERROR("Failed to create logical volume \"%s\": %s", lv,
-		      cmd_output);
-		free(pathdup);
-		return -1;
-	}
-	TRACE("Created new lvm storage volume \"%s\" on volume group \"%s\" "
-	      "of size \"%s\"", lv, vg, sz);
+	cmd_args.sigwipe = true;
+	TRACE("Creating new lvm storage volume \"%s\" on volume group \"%s\" of size \"%s\"", lv, vg, sz);
+	ret = run_command_status(cmd_output, sizeof(cmd_output), lvm_create_exec_wrapper,
+				 (void *)&cmd_args);
 
-	free(pathdup);
+	/* If lvcreate is old and doesn't support signature wiping, try again without it.
+	 * Test for exit code EINVALID_CMD_LINE(3) of lvcreate command.
+	 */
+	if (WIFEXITED(ret) && WEXITSTATUS(ret) == 3) {
+		cmd_args.sigwipe = false;
+		ret = run_command(cmd_output, sizeof(cmd_output), lvm_create_exec_wrapper,
+				  (void *)&cmd_args);
+	}
+
+	if (ret != 0)
+		return log_error(-1, "Failed to create logical volume \"%s\": %s", lv, cmd_output);
+	TRACE("Created new lvm storage volume \"%s\" on volume group \"%s\" of size \"%s\"", lv, vg, sz);
+
 	return ret;
 }
 
@@ -199,7 +176,7 @@ bool lvm_detect(const char *path)
 	int fd;
 	ssize_t ret;
 	struct stat statbuf;
-	char devp[MAXPATHLEN], buf[4];
+	char devp[PATH_MAX], buf[4];
 
 	if (!strncmp(path, "lvm:", 4))
 		return true;
@@ -211,9 +188,9 @@ bool lvm_detect(const char *path)
 	if (!S_ISBLK(statbuf.st_mode))
 		return false;
 
-	ret = snprintf(devp, MAXPATHLEN, "/sys/dev/block/%d:%d/dm/uuid",
+	ret = snprintf(devp, PATH_MAX, "/sys/dev/block/%d:%d/dm/uuid",
 		       major(statbuf.st_rdev), minor(statbuf.st_rdev));
-	if (ret < 0 || ret >= MAXPATHLEN) {
+	if (ret < 0 || ret >= PATH_MAX) {
 		ERROR("Failed to create string");
 		return false;
 	}
@@ -262,20 +239,20 @@ int lvm_umount(struct lxc_storage *bdev)
 	return umount(bdev->dest);
 }
 
+#define __LVSCMD "lvs --unbuffered --noheadings -o lv_attr %s 2>/dev/null"
 int lvm_compare_lv_attr(const char *path, int pos, const char expected)
 {
+	__do_free char *cmd = NULL;
 	struct lxc_popen_FILE *f;
 	int ret, status;
 	size_t len;
-	char *cmd;
 	char output[12];
 	int start = 0;
-	const char *lvscmd = "lvs --unbuffered --noheadings -o lv_attr %s 2>/dev/null";
 
-	len = strlen(lvscmd) + strlen(path) + 1;
-	cmd = alloca(len);
+	len = strlen(__LVSCMD) + strlen(path) + 1;
+	cmd = must_realloc(NULL, len);
 
-	ret = snprintf(cmd, len, lvscmd, path);
+	ret = snprintf(cmd, len, __LVSCMD, path);
 	if (ret < 0 || (size_t)ret >= len)
 		return -1;
 
@@ -295,10 +272,10 @@ int lvm_compare_lv_attr(const char *path, int pos, const char expected)
 		return 0;
 
 	len = strlen(output);
-	while (start < len && output[start] == ' ')
+	while ((size_t)start < len && output[start] == ' ')
 		start++;
 
-	if (start + pos < len && output[start + pos] == expected)
+	if ((size_t)(start + pos) < len && output[start + pos] == expected)
 		return 1;
 
 	return 0;
@@ -314,6 +291,11 @@ int lvm_is_thin_pool(const char *path)
 	return lvm_compare_lv_attr(path, 0, 't');
 }
 
+static inline bool fs_needs_new_uuid(const char *fstype)
+{
+	return strcmp(fstype, "xfs") == 0 || strcmp(fstype, "btrfs") == 0;
+}
+
 static int lvm_snapshot_create_new_uuid_wrapper(void *data)
 {
 	struct lvcreate_args *args = data;
@@ -324,38 +306,32 @@ static int lvm_snapshot_create_new_uuid_wrapper(void *data)
 	if (strcmp(args->fstype, "btrfs") == 0)
 		execlp("btrfstune", "btrfstune", "-f", "-u", args->lv, (char *)NULL);
 
-	return -1;
+	return 0;
 }
 
 static int lvm_snapshot(struct lxc_storage *orig, const char *path, uint64_t size)
 {
+	__do_free char *pathdup = NULL;
 	int ret;
-	char *lv, *pathdup;
+	char *lv;
 	char sz[24];
 	char fstype[100];
-	char cmd_output[MAXPATHLEN];
+	char cmd_output[PATH_MAX];
 	char repairchar;
 	const char *origsrc;
 	struct lvcreate_args cmd_args = {0};
 
-	ret = snprintf(sz, 24, "%" PRIu64 "b", size);
-	if (ret < 0 || ret >= 24) {
-		ERROR("Failed to create string");
-		return -1;
-	}
+	ret = snprintf(sz, sizeof(sz), "%" PRIu64 "b", size);
+	if (ret < 0 || (size_t)ret >= sizeof(sz))
+		return log_error_errno(-EIO, EIO, "Failed to create string");
 
 	pathdup = strdup(path);
-	if (!pathdup) {
-		ERROR("Failed to duplicate string \"%s\"", path);
-		return -1;
-	}
+	if (!pathdup)
+		return log_error_errno(-ENOMEM, ENOMEM, "Failed to duplicate string \"%s\"", path);
 
 	lv = strrchr(pathdup, '/');
-	if (!lv) {
-		ERROR("Failed to detect \"/\" in string \"%s\"", pathdup);
-		free(pathdup);
-		return -1;
-	}
+	if (!lv)
+		return log_error_errno(-ENOENT, ENOENT, "Failed to detect \"/\" in string \"%s\"", pathdup);
 	repairchar = *lv;
 	*lv = '\0';
 	lv++;
@@ -367,12 +343,10 @@ static int lvm_snapshot(struct lxc_storage *orig, const char *path, uint64_t siz
 	 */
 	origsrc = lxc_storage_get_path(orig->src, "lvm");
 	ret = lvm_is_thin_volume(origsrc);
-	if (ret < 0) {
-		free(pathdup);
+	if (ret < 0)
 		return -1;
-	} else if (ret) {
+	else if (ret)
 		cmd_args.thinpool = origsrc;
-	}
 
 	cmd_args.lv = lv;
 	cmd_args.source_lv = origsrc;
@@ -381,17 +355,15 @@ static int lvm_snapshot(struct lxc_storage *orig, const char *path, uint64_t siz
 	      origsrc, sz);
 	ret = run_command(cmd_output, sizeof(cmd_output),
 			  lvm_snapshot_exec_wrapper, (void *)&cmd_args);
-	if (ret < 0) {
-		ERROR("Failed to create logical volume \"%s\": %s", lv, cmd_output);
-		free(pathdup);
-		return -1;
-	}
+	if (ret < 0)
+		return log_error_errno(-1, errno, "Failed to create logical volume \"%s\": %s",
+				       lv, cmd_output);
 
-	if (detect_fs(orig, fstype, 100) < 0) {
-		INFO("Failed to detect filesystem type for \"%s\"", origsrc);
-		free(pathdup);
-		return -1;
-	}
+	if (detect_fs(orig, fstype, 100) < 0)
+		return log_error_errno(-EINVAL, EINVAL, "Failed to detect filesystem type for \"%s\"", origsrc);
+
+	if (!fs_needs_new_uuid(fstype))
+		return 0;
 
 	/* repair path */
 	lv--;
@@ -400,13 +372,10 @@ static int lvm_snapshot(struct lxc_storage *orig, const char *path, uint64_t siz
 	cmd_args.fstype = fstype;
 	ret = run_command(cmd_output, sizeof(cmd_output),
 			  lvm_snapshot_create_new_uuid_wrapper, (void *)&cmd_args);
-	if (ret < 0) {
-		ERROR("Failed to create new uuid for volume \"%s\": %s", pathdup, cmd_output);
-		free(pathdup);
-		return -1;
-	}
+	if (ret < 0)
+		return log_error_errno(-1, errno, "Failed to create new uuid for volume \"%s\": %s",
+				       pathdup, cmd_output);
 
-	free(pathdup);
 	return 0;
 }
 
@@ -487,7 +456,7 @@ int lvm_clonepaths(struct lxc_storage *orig, struct lxc_storage *new,
 		return -1;
 	}
 
-	ret = mkdir_p(new->dest, 0755);
+	ret = lxc_mkdir_p(new->dest, 0755);
 	if (ret < 0) {
 		SYSERROR("Failed to create directory \"%s\"", new->dest);
 		return -1;
@@ -504,7 +473,7 @@ bool lvm_create_clone(struct lxc_conf *conf, struct lxc_storage *orig,
 	const char *thinpool;
 	struct rsync_data data;
 	const char *cmd_args[2];
-	char cmd_output[MAXPATHLEN] = {0};
+	char cmd_output[PATH_MAX] = {0};
 	char fstype[100] = "ext4";
 	uint64_t size = newsize;
 
@@ -513,13 +482,13 @@ bool lvm_create_clone(struct lxc_conf *conf, struct lxc_storage *orig,
 		if (!newsize && blk_getsize(orig, &size) < 0) {
 			ERROR("Failed to detect size of logical volume \"%s\"",
 			      orig->src);
-			return -1;
+			return false;
 		}
 
 		/* detect filesystem */
 		if (detect_fs(orig, fstype, 100) < 0) {
 			INFO("Failed to detect filesystem type for \"%s\"", orig->src);
-			return -1;
+			return false;
 		}
 	} else if (!newsize) {
 			size = DEFAULT_FS_SIZE;
@@ -531,7 +500,7 @@ bool lvm_create_clone(struct lxc_conf *conf, struct lxc_storage *orig,
 	ret = do_lvm_create(src, size, thinpool);
 	if (ret < 0) {
 		ERROR("Failed to create lvm storage volume \"%s\"", src);
-		return -1;
+		return false;
 	}
 
 	cmd_args[0] = fstype;
@@ -541,7 +510,7 @@ bool lvm_create_clone(struct lxc_conf *conf, struct lxc_storage *orig,
 	if (ret < 0) {
 		ERROR("Failed to create new filesystem \"%s\" for lvm storage "
 		      "volume \"%s\": %s", fstype, src, cmd_output);
-		return -1;
+		return false;
 	}
 
 	data.orig = orig;
@@ -591,7 +560,7 @@ bool lvm_create_snapshot(struct lxc_conf *conf, struct lxc_storage *orig,
 int lvm_destroy(struct lxc_storage *orig)
 {
 	int ret;
-	char cmd_output[MAXPATHLEN];
+	char cmd_output[PATH_MAX];
 	struct lvcreate_args cmd_args = {0};
 
 	cmd_args.lv = lxc_storage_get_path(orig->src, "lvm");
@@ -608,13 +577,13 @@ int lvm_destroy(struct lxc_storage *orig)
 }
 
 int lvm_create(struct lxc_storage *bdev, const char *dest, const char *n,
-	       struct bdev_specs *specs)
+	       struct bdev_specs *specs, const struct lxc_conf *conf)
 {
 	const char *vg, *thinpool, *fstype, *lv = n;
 	uint64_t sz;
 	int ret, len;
 	const char *cmd_args[2];
-	char cmd_output[MAXPATHLEN];
+	char cmd_output[PATH_MAX];
 
 	if (!specs)
 		return -1;
@@ -676,7 +645,7 @@ int lvm_create(struct lxc_storage *bdev, const char *dest, const char *n,
 		return -1;
 	}
 
-	ret = mkdir_p(bdev->dest, 0755);
+	ret = lxc_mkdir_p(bdev->dest, 0755);
 	if (ret < 0) {
 		SYSERROR("Failed to create directory \"%s\"", bdev->dest);
 		return -1;

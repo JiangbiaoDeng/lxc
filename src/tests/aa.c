@@ -1,40 +1,59 @@
 /* liblxcapi
  *
- * Copyright © 2014 Serge Hallyn <serge.hallyn@ubuntu.com>.
- * Copyright © 2014 Canonical Ltd.
+ * SPDX-License-Identifier: GPL-2.0-only
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2, as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+#include "config.h"
 
 /* Test apparmor rules */
 #include <lxc/lxccontainer.h>
-#include "lxc/utils.h"
+#include "utils.h"
 
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
 
 #define MYNAME "test-aa"
+#define MYNAME2 "test-aa-o1"
+
+static char *read_file(char *fname) {
+	FILE *f = fopen(fname, "r");
+	ssize_t ret;
+	size_t len = 0;
+	char *v = NULL;
+
+	if (!f) {
+		fprintf(stderr, "Failed to open %s: %m\n", fname);
+		return NULL;
+	}
+	ret = getline(&v, &len, f);
+	if (ret == -1) {
+		fprintf(stderr, "Failed reading a line from %s: %m\n", fname);
+		free(v);
+		if (f)
+			fclose(f);
+		return NULL;
+	}
+	if (f)
+		fclose(f);
+	return v;
+}
 
 static void try_to_remove(void)
 {
-	struct lxc_container *c;
+	struct lxc_container *c, *c2;
 	c = lxc_container_new(MYNAME, NULL);
 	if (c) {
 		if (c->is_defined(c))
 			c->destroy(c);
 		lxc_container_put(c);
+	}
+	c2 = lxc_container_new(MYNAME2, NULL);
+	if (c2) {
+		if (c2->is_defined(c2))
+			c2->destroy(c2);
+		lxc_container_put(c2);
 	}
 }
 
@@ -57,7 +76,7 @@ static int test_attach_write_file(void* payload)
 
 /*
  * try opening a file attached to a container.  Return 0 on open fail.  Return
- * 1 if the file open succeeded.  Return -1 if attach itself failed - perhas an
+ * 1 if the file open succeeded.  Return -1 if attach itself failed - perhaps an
  * older kernel.
  */
 static int do_test_file_open(struct lxc_container *c, char *fnam)
@@ -94,7 +113,7 @@ static int do_test_file_open(struct lxc_container *c, char *fnam)
 		fret = 0;
 
 err2:
-	wait_for_pid(pid);
+	(void)wait_for_pid(pid);
 err1:
 	close(pipefd[0]);
 	close(pipefd[1]);
@@ -149,12 +168,14 @@ static bool test_aa_policy(struct lxc_container *c)
 
 int main(int argc, char *argv[])
 {
-	struct lxc_container *c;
+	struct lxc_container *c, *c2= NULL;
+	char *v = NULL;
+
 	try_to_remove();
 	c = lxc_container_new(MYNAME, NULL);
 	if (!c) {
 		fprintf(stderr, "%s: %d: failed to load first container\n", __FILE__, __LINE__);
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 
 	if (c->is_defined(c)) {
@@ -189,10 +210,45 @@ int main(int argc, char *argv[])
 
 	c->stop(c);
 
+	c2 = c->clone(c, MYNAME2, NULL, LXC_CLONE_SNAPSHOT, "overlayfs", NULL, 0, NULL);
+	if (!c2) {
+		fprintf(stderr, "Error cloning " MYNAME " to " MYNAME2 "\n");
+		goto err;
+	}
+
+	c2->want_daemonize(c2, true);
+	if (!c2->startl(c2, 0, NULL)) {
+		fprintf(stderr, "Error starting container\n");
+		goto err;
+	}
+
+	char pidstr[50];
+	snprintf(pidstr, 50, "/proc/%d/attr/current", c2->init_pid(c2));
+	v = read_file(pidstr);
+	if (!v) {
+		fprintf(stderr, "Failed to read the apparmor profile name from '%s'\n", pidstr);
+		goto err;
+	}
+
+	fprintf(stderr, "apparmor policy of clone: %s\n", v);
+	char *exp1 = "lxc-";
+	if (strncmp(v, exp1, strlen(exp1)) != 0) {
+		fprintf(stderr, "Wrong profile: %s", v);
+		goto err;
+	}
+	if (strstr(v, "(enforce)") == NULL) {
+		fprintf(stderr, "Wrong profile: %s", v);
+		goto err;
+	}
+
+	c2->stop(c2);
+
+	free(v);
 	try_to_remove();
-	exit(0);
+	exit(EXIT_SUCCESS);
 
 err:
+	free(v);
 	try_to_remove();
-	exit(1);
+	exit(EXIT_FAILURE);
 }

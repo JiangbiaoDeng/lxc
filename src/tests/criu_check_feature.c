@@ -1,20 +1,10 @@
 /* liblxcapi
  *
- * Copyright © 2017 Adrian Reber <areber@redhat.com>
+ * SPDX-License-Identifier: GPL-2.0-only
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2, as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+#include "config.h"
 
 #include <string.h>
 #include <limits.h>
@@ -48,7 +38,7 @@ int main(int argc, char *argv[])
 		goto on_error_put;
 	}
 
-	/* do the actual fature check for memory tracking */
+	/* do the actual feature check for memory tracking */
 	m_opts.features_to_check = FEATURE_MEM_TRACK;
 	if (c->migrate(c, MIGRATE_FEATURE_CHECK, &m_opts, sizeof(struct migrate_opts))) {
 		lxc_debug("%s\n", "System does not support \"FEATURE_MEM_TRACK\".");
@@ -86,5 +76,6 @@ on_error_put:
 	lxc_container_put(c);
 	if (ret == EXIT_SUCCESS)
 		lxc_debug("%s\n", "All criu feature check tests passed");
+
 	exit(ret);
 }

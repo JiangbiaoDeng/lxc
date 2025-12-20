@@ -1,21 +1,11 @@
 /* liblxcapi
  *
- * Copyright © 2012 Serge Hallyn <serge.hallyn@ubuntu.com>.
- * Copyright © 2012 Canonical Ltd.
+ * SPDX-License-Identifier: GPL-2.0-only
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2, as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+#include "config.h"
+
 #include <lxc/lxccontainer.h>
 
 #include <unistd.h>
@@ -37,24 +27,30 @@ static int create_container(void)
 		perror("fork");
 		return -1;
 	}
+
 	if (pid == 0) {
 		execlp("lxc-create", "lxc-create", "-t", "busybox", "-n", MYNAME, NULL);
 		exit(EXIT_FAILURE);
 	}
+
 again:
 	ret = waitpid(pid, &status, 0);
 	if (ret == -1) {
 		if (errno == EINTR)
 			goto again;
+
 		perror("waitpid");
 		return -1;
 	}
+
 	if (ret != pid)
 		goto again;
+
 	if (!WIFEXITED(status))  { // did not exit normally
 		fprintf(stderr, "%d: lxc-create exited abnormally\n", __LINE__);
 		return -1;
 	}
+
 	return WEXITSTATUS(status);
 }
 
@@ -96,6 +92,7 @@ int main(int argc, char *argv[])
 
 	fprintf(stderr, "all lxc_container tests passed for %s\n", c->name);
 	ret = 0;
+
 out:
 	lxc_container_put(c);
 	exit(ret);
